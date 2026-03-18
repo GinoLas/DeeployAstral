@@ -11,43 +11,25 @@ from Deeploy.TilingExtension.AsyncDma import AsyncDma, DirectionWaitingStrategy,
 
 class MchanChannelFuture(Future):
 
-    _initTemplate = NodeTemplate("")
+    _initTemplate = NodeTemplate("uint32_t ${name} = (uint32_t) -1;")
 
     _deinitTemplate = NodeTemplate("")
 
-    _allocTemplate = NodeTemplate("")
+    _allocTemplate = NodeTemplate("${name} = mchan_channel_alloc();")
 
     _waitTemplate = NodeTemplate("""
+if (${name} <= MCHAN_CHANNEL_ID_MAX) {
+    mchan_channel_wait(${name});
+    mchan_channel_free(${name});
+}
 """)
-    
-
-
 
 
 class MchanDma(AsyncDma):
 
     _transferTemplates = {
-        1: NodeTemplate("""
-                        cl_task.size = ${size};
-                        cl_task.src = ${loc};
-                        cl_task.dst = ${ext};
-                        mailbox_send(1,&cl_task,${ot_flags});
-                        mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
-                        wait_for_idma_transfer();
-                        """),
-        2: NodeTemplate("""
-                        //${size_1d}
-                        cl_task.size = ${size};
-                        cl_task.src = ${loc};
-                        cl_task.dst = ${ext};
-                        cl_task.src_stride = ${stride_2d};
-                        cl_task.dst_stride = ${stride_2d};
-                        cl_task.repetitions = ${repetitions};
-                        cl_task.size_1d = ${size_1d};
-                        mailbox_send(1,&cl_task,${ot_flags});
-                        mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
-                        wait_for_idma_transfer();
-                        """),
+        1: NodeTemplate("mchan_transfer_1d(${cmd}, ${loc}, ${ext});"),
+        2: NodeTemplate("mchan_transfer_2d_ext_strided(${cmd}, ${loc}, ${ext}, ${size_1d}, ${stride_2d});"),
     }
     _waitingStrategy = DirectionWaitingStrategy(MchanChannelFuture, "channel")
 
@@ -90,47 +72,8 @@ class MchanDma(AsyncDma):
 
         operatorRepresentation["cmd"] = (mchanFlags << 17) + mchanTransferSize
 
-        operatorRepresentation["size"] = mchanTransferSize
-
-        
-
-        '''
-
-        - Tipo di trasferimento (pesi, attivazioni)
-        - Tipo di operazione (cifratura, decifratura)
-        - Geometria trasferimento (1d,2d [3d?])
-        - 
-
-        bit[0] -> geometria trasferimento (0 = 1d, 1 = 2d) 
-        bit[1] -> Tipo di trasferimento (0 = pesi, 1 = attivazioni)
-        bit[2] -> Tipo di operazione (0 = cifratura, 1 = decifratura)
-
-        '''
-
-        OTflags = 0
-
-
-        if(direction == "ExternalToLocal"):
-            OTflags += (1 << 2)
-            tmp = operatorRepresentation["loc"]
-            operatorRepresentation["loc"] = operatorRepresentation["ext"]
-            operatorRepresentation["ext"] = tmp
-
-        if transferRank == 2:   
-            OTflags += (1 << 0)
-            operatorRepresentation["repetitions"] = (int)(mchanTransferSize / shape[1])
+        if transferRank == 2:
             operatorRepresentation["size_1d"] = shape[1]
             operatorRepresentation["stride_2d"] = strideExt[0]
-
-      
-
-        if("weight" in externalBuffer.name or "weight" in localBuffer.name):
-            OTflags += (1 << 1)
-
-        operatorRepresentation["ot_flags"] = OTflags
-        
-
-
-
 
         return operatorRepresentation
