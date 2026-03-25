@@ -102,7 +102,7 @@ class MchanDma(AsyncDma):
         - 
 
         bit[0] -> geometria trasferimento (0 = 1d, 1 = 2d) 
-        bit[1] -> Tipo di trasferimento (0 = pesi, 1 = attivazioni)
+        bit[1] -> Tipo di trasferimento (0 = attivazioni, 1 = pesi)
         bit[2] -> Tipo di operazione (0 = cifratura, 1 = decifratura)
 
         '''
