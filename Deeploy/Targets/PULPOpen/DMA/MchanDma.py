@@ -99,11 +99,11 @@ class MchanDma(AsyncDma):
         - Tipo di trasferimento (pesi, attivazioni)
         - Tipo di operazione (cifratura, decifratura)
         - Geometria trasferimento (1d,2d [3d?])
-        - 
 
         bit[0] -> geometria trasferimento (0 = 1d, 1 = 2d) 
-        bit[1] -> Tipo di trasferimento (0 = attivazioni, 1 = pesi)
+        bit[1] -> Flag pesi (0 = attivazioni, 1 = pesi)
         bit[2] -> Tipo di operazione (0 = cifratura, 1 = decifratura)
+        bit[3] -> Attiva operazione (0 = solo spostamento, 1 = considera il bit 2)
 
         '''
 
@@ -122,10 +122,14 @@ class MchanDma(AsyncDma):
             operatorRepresentation["size_1d"] = shape[1]
             operatorRepresentation["stride_2d"] = strideExt[0]
 
-      
+        print(externalBuffer.name)
 
         if("weight" in externalBuffer.name or "weight" in localBuffer.name):
             OTflags += (1 << 1)
+        
+        if("input" not in externalBuffer.name and "output" not in externalBuffer.name):
+            print("Not clean! Operation needed")
+            OTflags += (1 << 3)
 
         operatorRepresentation["ot_flags"] = OTflags
         
