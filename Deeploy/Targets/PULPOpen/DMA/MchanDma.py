@@ -5,7 +5,7 @@
 import math
 from typing import Dict, Tuple
 
-from Deeploy.DeeployTypes import NetworkContext, NodeTemplate, OperatorRepresentation, VariableBuffer
+from Deeploy.DeeployTypes import NetworkContext, NodeTemplate, OperatorRepresentation, VariableBuffer, TransientBuffer
 from Deeploy.TilingExtension.AsyncDma import AsyncDma, DirectionWaitingStrategy, DmaDirection, Future
 
 
@@ -68,13 +68,23 @@ class MchanDma(AsyncDma):
             assert strideLoc[0] == shape[1] and strideLoc[
                 1] == 1, "Mchan supports only contigous transfers for local memory"
 
-    def transferOpRepr(self, externalBuffer: VariableBuffer, localBuffer: VariableBuffer, shape: Tuple[int, ...],
+    def transferOpRepr(self,ctxt : NetworkContext, externalBuffer: VariableBuffer, localBuffer: VariableBuffer, shape: Tuple[int, ...],
                        strideExt: Tuple[int, ...], strideLoc: Tuple[int, ...], direction: DmaDirection,
                        future: Future) -> OperatorRepresentation:
         operatorRepresentation = super().transferOpRepr(externalBuffer, localBuffer, shape, strideExt, strideLoc,
                                                         direction, future)
 
+        is_input = ctxt.lookup(externalBuffer._referenceName).is_input
+        is_output = ctxt.lookup(externalBuffer._referenceName).is_output
+
+        print(externalBuffer.name)
+
+
         transferRank = len(shape)
+
+
+
+
 
         mchanFlags = 0
         mchanFlags += (1 << 0) if direction == "ExternalToLocal" else 0  # direction
@@ -91,6 +101,10 @@ class MchanDma(AsyncDma):
         operatorRepresentation["cmd"] = (mchanFlags << 17) + mchanTransferSize
 
         operatorRepresentation["size"] = mchanTransferSize
+
+        a = ctxt.lookup(externalBuffer._referenceName)
+
+        print(a._instance)
 
         
 
@@ -122,13 +136,10 @@ class MchanDma(AsyncDma):
             operatorRepresentation["size_1d"] = shape[1]
             operatorRepresentation["stride_2d"] = strideExt[0]
 
-        print(externalBuffer.name)
-
         if("weight" in externalBuffer.name or "weight" in localBuffer.name):
             OTflags += (1 << 1)
         
-        if("input" not in externalBuffer.name and "output" not in externalBuffer.name):
-            print("Not clean! Operation needed")
+        if( not is_input and not is_output):
             OTflags += (1 << 3)
 
         operatorRepresentation["ot_flags"] = OTflags

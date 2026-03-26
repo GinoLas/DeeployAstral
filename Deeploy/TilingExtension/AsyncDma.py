@@ -125,7 +125,8 @@ class AsyncDma(ABC):
                  shape: Tuple[int, ...], strideExt: Tuple[int, ...], strideLoc: Tuple[int, ...],
                  direction: DmaDirection, future: Future) -> List[CodeSnippet]:
         self.checkTransfer(ctxt, externalBuffer, localBuffer, shape, strideExt, strideLoc, direction)
-        opRepr = self.transferOpRepr(externalBuffer, localBuffer, shape, strideExt, strideLoc, direction, future)
+        #opRepr = self.transferOpRepr(externalBuffer, localBuffer, shape, strideExt, strideLoc, direction, future)
+        opRepr = self.transferOpRepr(ctxt,externalBuffer, localBuffer, shape, strideExt, strideLoc, direction, future)
         template = self._transferTemplates[len(shape)]
         return [CodeSnippet(template, opRepr)]
 
@@ -268,8 +269,10 @@ class AnydimAsyncDmaTransferAdapter:
             callStack.extend(dma_code)
             callStack.append(CodeSnippet(self.NestedForLoopCloseTemplate(nestedLoopDepth), {}))
             return callStack
+        #TRASFERIMENTO
         elif kernelRank == transferRank:
             return self.dma.transfer(ctxt, externalBuffer, localBuffer, shape, strideExt, strideLoc, direction, future)
+        
         else:
             return self.dma.transfer(ctxt, externalBuffer, localBuffer, padShape(shape, kernelRank),
                                      padStride(strideExt, kernelRank, strideExtPad),

@@ -36,12 +36,14 @@ class PULPClusterTiling(CodeTransformationPass):
         self.DB = PULPClusterTilingGenerationDB(externalMemory, localMemory, dma)
         self.profilingDB = ProfilingPULPClusterTilingGenerationDB(externalMemory, localMemory, dma)
 
+
+
     def apply(self,
               ctxt: NetworkContext,
               executionBlock: ExecutionBlock,
               name: str,
               verbose: CodeGenVerbosity = _NoVerbosity) -> Tuple[NetworkContext, ExecutionBlock]:
-
+        
         if verbose.tilingProfiling:
             ctxt, executionBlock = self.profilingSB.apply(ctxt, executionBlock, name)
             ctxt, executionBlock = self.profilingDB.apply(ctxt, executionBlock, name)

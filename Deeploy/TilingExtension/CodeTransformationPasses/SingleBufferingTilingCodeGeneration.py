@@ -87,7 +87,6 @@ class SingleBufferingTilingCodeGeneration(TilingCodeGeneration):
 
         # 2) for TILING_I in numTiles:
         openLoopStatements = [CodeSnippet(self._openTileLoopTemplate, {**operatorRepresentation})]
-
         # 2.2) Input data transfer for current tile
         ctxt, ingressDMAStatements, ingressFutures = self._generateTransferScheduleCalls(
             ctxt, operatorRepresentation, tilingSchedule.inputLoadSchedule,

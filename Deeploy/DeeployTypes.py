@@ -2797,6 +2797,7 @@ class NetworkContainer():
         callStack = ''
 
         for key, node in self.layerBinding.items():
+            print(node)
             self.ctxt, code = node.generate(self.ctxt)
 
             sections = reduce(lambda a, b: a + b, code, [])
@@ -3484,7 +3485,6 @@ class NetworkDeployer(NetworkContainer):
         log.info(80 * "=")
         log.info("Deeploy BackEnd")
         log.info(80 * "=")
-
         log.info("- Performing code transformations and optimization...")
         self.codeTransform(verbose)
 
