@@ -116,6 +116,9 @@ class SingleBufferingTilingCodeGeneration(TilingCodeGeneration):
 
         closeLoopStatements = [CodeSnippet(self._closeTileLoopTemplate, {**operatorRepresentation})]
 
+
+
+
         metaInfo = TilingMetaInfo(nodeName = operatorRepresentation['nodeName'] + f"_{self.externalMemory}",
                                   nodeOps = operatorRepresentation['nodeOps'],
                                   numTiles = operatorRepresentation['numTiles'],

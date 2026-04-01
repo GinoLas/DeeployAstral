@@ -2,11 +2,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import math
 from typing import Dict, Tuple
 
 from Deeploy.DeeployTypes import NetworkContext, NodeTemplate, OperatorRepresentation, VariableBuffer, TransientBuffer
 from Deeploy.TilingExtension.AsyncDma import AsyncDma, DirectionWaitingStrategy, DmaDirection, Future
+
+counter = 0
+
+hash_counter = {}
 
 
 class MchanChannelFuture(Future):
@@ -21,6 +26,16 @@ class MchanChannelFuture(Future):
 """)
     
 
+def calcola_sha256(testo):
+    testo_in_byte = testo.encode('utf-8')
+    
+    hash_object = hashlib.sha256(testo_in_byte)
+    
+    hash_esadecimale = hash_object.hexdigest()
+    
+    return hash_esadecimale
+    
+
 
 
 
@@ -28,6 +43,8 @@ class MchanDma(AsyncDma):
 
     _transferTemplates = {
         1: NodeTemplate("""
+                        //sha256 = ${sha256}
+                        cl_task.transfer_id = 0x${sha256};
                         cl_task.size = ${size};
                         cl_task.src = ${loc};
                         cl_task.dst = ${ext};
@@ -36,7 +53,9 @@ class MchanDma(AsyncDma):
                         wait_for_idma_transfer();
                         """),
         2: NodeTemplate("""
+                        //sha256 = ${sha256}
                         //${size_1d}
+                        cl_task.transfer_id = 0x${sha256};
                         cl_task.size = ${size};
                         cl_task.src = ${loc};
                         cl_task.dst = ${ext};
@@ -77,11 +96,7 @@ class MchanDma(AsyncDma):
         is_input = ctxt.lookup(externalBuffer._referenceName).is_input
         is_output = ctxt.lookup(externalBuffer._referenceName).is_output
 
-        print(externalBuffer.name)
-
-
         transferRank = len(shape)
-
 
 
 
@@ -102,10 +117,6 @@ class MchanDma(AsyncDma):
 
         operatorRepresentation["size"] = mchanTransferSize
 
-        a = ctxt.lookup(externalBuffer._referenceName)
-
-        print(a._instance)
-
         
 
         '''
@@ -118,6 +129,7 @@ class MchanDma(AsyncDma):
         bit[1] -> Flag pesi (0 = attivazioni, 1 = pesi)
         bit[2] -> Tipo di operazione (0 = cifratura, 1 = decifratura)
         bit[3] -> Attiva operazione (0 = solo spostamento, 1 = considera il bit 2)
+        bit[4] -> Clear della hashmap
 
         '''
 
@@ -130,6 +142,24 @@ class MchanDma(AsyncDma):
             operatorRepresentation["loc"] = operatorRepresentation["ext"]
             operatorRepresentation["ext"] = tmp
 
+        testo = operatorRepresentation["loc"]+operatorRepresentation["ext"]
+
+
+        sha = calcola_sha256(testo)
+
+        if(sha not in hash_counter.keys()):
+            global counter
+            counter += 1
+            hash_counter[sha] = counter
+
+        
+
+        operatorRepresentation["sha256"] = calcola_sha256(testo)[0:8]
+
+        print(operatorRepresentation["sha256"])
+
+
+
         if transferRank == 2:   
             OTflags += (1 << 0)
             operatorRepresentation["repetitions"] = (int)(mchanTransferSize / shape[1])
@@ -138,9 +168,16 @@ class MchanDma(AsyncDma):
 
         if("weight" in externalBuffer.name or "weight" in localBuffer.name):
             OTflags += (1 << 1)
+
+        old_size = mchanTransferSize
+
         
         if( not is_input and not is_output):
+            if(mchanTransferSize % 16 != 0):
+                mchanTransferSize += 16 - mchanTransferSize%16
             OTflags += (1 << 3)
+
+        print(str(old_size) + "->" + str(mchanTransferSize))
 
         operatorRepresentation["ot_flags"] = OTflags
         
