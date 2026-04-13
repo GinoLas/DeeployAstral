@@ -181,10 +181,19 @@ def generateTestNetworkImplementation(deployer: NetworkDeployer, verbosityCfg: C
 
     retStr += deployer.generateFunction(verbosityCfg)
     if isinstance(deployer.Platform, (PULPPlatform, MemoryPULPPlatform, MemoryPULPPlatformWrapper)):
+        # retStr += """
+        # }
+
+        # void InitNetwork(){
+        # """
         retStr += """
         }
 
         void InitNetwork(){
+        
+            mailbox_send(1, 0, 16);
+            mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
+            wait_for_idma_transfer();
         """
     else:
         retStr += """
