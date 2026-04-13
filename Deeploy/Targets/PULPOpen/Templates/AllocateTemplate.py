@@ -17,8 +17,11 @@ pulpL1AllocateTemplate = NodeTemplate(
 pulpL2GlobalInitTemplate = NodeTemplate(
     "static PI_L2 ${type.referencedType.typeName} ${name}[${size}] = {${values}};\n")
 
+#pulpL1GlobalInitTemplate = NodeTemplate(
+#    "static PI_L1 ${type.referencedType.typeName} ${name}[${size}] = {${values}};\n")
+
 pulpL1GlobalInitTemplate = NodeTemplate(
-    "static PI_L1 ${type.referencedType.typeName} ${name}[${size}] = {${values}};\n")
+    "static L1_DATA ${type.referencedType.typeName} ${name}[${size}] = {${values}};\n")
 
 #pulpL2GlobalInitTemplate = NodeTemplate("static const ${type} ${name}[${size}];\n")
 pulpL2GlobalAllocateTemplate = NodeTemplate("")
@@ -33,6 +36,16 @@ pulpL2StructAllocateTemplate = NodeTemplate(""" % for key, value in structDict.i
     ${name}.${key} = ${value};
 % endfor """)
 
+# pulpGenericStructInitTemplate = NodeTemplate("""
+# % if _memoryLevel == "L1":
+# static PI_L1 ${type.typeName} ${name};\n
+# % elif _memoryLevel == "L2" or _memoryLevel is None:
+# static PI_L2 ${type.typeName} ${name};\n
+# % elif _memoryLevel == "L3":
+# // ${name} is allocated in L3 \n
+# % endif
+# """)
+
 pulpGenericStructInitTemplate = NodeTemplate("""
 % if _memoryLevel == "L1":
 static PI_L1 ${type.typeName} ${name};\n
@@ -43,9 +56,21 @@ static PI_L2 ${type.typeName} ${name};\n
 % endif
 """)
 
+
+# pulpGenericGlobalInitTemplate = NodeTemplate("""
+# % if _memoryLevel == "L1":
+# static PI_L1 ${type.referencedType.typeName} ${name}[${size}] = {${values}};\n
+# % elif _memoryLevel == "L2" or _memoryLevel is None:
+# static PI_L2 ${type.referencedType.typeName} ${name}[${size}] = {${values}};\n
+# % elif _memoryLevel == "L3":
+# // ${name} is allocated in L3 \n
+# static PI_L2 ${type.referencedType.typeName}* ${name};
+# % endif
+# """)
+
 pulpGenericGlobalInitTemplate = NodeTemplate("""
 % if _memoryLevel == "L1":
-static PI_L1 ${type.referencedType.typeName} ${name}[${size}] = {${values}};\n
+static L1_DATA ${type.referencedType.typeName} ${name}[${size}] = {${values}};\n
 % elif _memoryLevel == "L2" or _memoryLevel is None:
 static PI_L2 ${type.referencedType.typeName} ${name}[${size}] = {${values}};\n
 % elif _memoryLevel == "L3":
@@ -53,6 +78,8 @@ static PI_L2 ${type.referencedType.typeName} ${name}[${size}] = {${values}};\n
 static PI_L2 ${type.referencedType.typeName}* ${name};
 % endif
 """)
+
+
 
 pulpGenericAllocate = NodeTemplate("""
 % if _memoryLevel == "L1":
