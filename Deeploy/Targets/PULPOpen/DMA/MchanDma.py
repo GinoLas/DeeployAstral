@@ -44,6 +44,8 @@ class MchanDma(AsyncDma):
     _transferTemplates = {
         1: NodeTemplate("""
                         //sha256 = ${sha256}
+                        //bufferHash = ${bufferHash}
+                        //cl_task.bufferHash = 0x${bufferHash};
                         cl_task.transfer_id = 0x${sha256};
                         cl_task.size = ${size};
                         cl_task.src = ${loc};
@@ -54,7 +56,9 @@ class MchanDma(AsyncDma):
                         """),
         2: NodeTemplate("""
                         //sha256 = ${sha256}
+                        //bufferHash = ${bufferHash}
                         //${size_1d}
+                        //cl_task.bufferHash = 0x${bufferHash};
                         cl_task.transfer_id = 0x${sha256};
                         cl_task.size = ${size};
                         cl_task.src = ${loc};
@@ -93,10 +97,13 @@ class MchanDma(AsyncDma):
         operatorRepresentation = super().transferOpRepr(externalBuffer, localBuffer, shape, strideExt, strideLoc,
                                                         direction, future)
 
-        is_input = ctxt.lookup(externalBuffer._referenceName).is_input
-        is_output = ctxt.lookup(externalBuffer._referenceName).is_output
+        is_input = ctxt.lookup(externalBuffer._referenceName).is_input or ctxt.lookup(localBuffer._referenceName).is_input
+        is_output = ctxt.lookup(externalBuffer._referenceName).is_output or ctxt.lookup(localBuffer._referenceName).is_output
 
         transferRank = len(shape)
+
+
+
 
 
 
@@ -144,6 +151,10 @@ class MchanDma(AsyncDma):
 
         testo = operatorRepresentation["loc"]+operatorRepresentation["ext"]
 
+        bufferHash = calcola_sha256(localBuffer._referenceName)[0:8]
+
+        operatorRepresentation["bufferHash"] = bufferHash
+
 
         sha = calcola_sha256(testo)
 
@@ -158,6 +169,8 @@ class MchanDma(AsyncDma):
 
         print(operatorRepresentation["sha256"])
 
+        print(externalBuffer.name + "->" + str(externalBuffer.shape))
+        print(localBuffer.name + "->" + str(externalBuffer.shape))
 
 
         if transferRank == 2:   
@@ -172,12 +185,19 @@ class MchanDma(AsyncDma):
         old_size = mchanTransferSize
 
         
-        if( not is_input and not is_output):
+        if( (not is_input) and (not is_output)):
             if(mchanTransferSize % 16 != 0):
                 mchanTransferSize += 16 - mchanTransferSize%16
-            OTflags += (1 << 3)
+            if("mul_tensor" not in externalBuffer.name and "add_tensor" not in externalBuffer.name):
+                OTflags += (1 << 3)
+            # print(operatorRepresentation["sha256"]+ "-->" + " NOT input/output")
+        # else:
+            # print(operatorRepresentation["sha256"]+ "-->" + " input/output")
 
-        print(str(old_size) + "->" + str(mchanTransferSize))
+        
+
+
+        # print(str(old_size) + "->" + str(mchanTransferSize))
 
         operatorRepresentation["ot_flags"] = OTflags
         

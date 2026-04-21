@@ -1,0 +1,463 @@
+a6cc4e07--> input/output
+1024->1024
+a6cc4e07--> input/output
+1024->1024
+4f9a9062--> NOT input/output
+1024->1024
+4f9a9062--> NOT input/output
+1024->1024
+1cc2e99a--> NOT input/output
+1024->1024
+1cc2e99a--> NOT input/output
+1024->1024
+98e3aa85--> NOT input/output
+144->144
+98e3aa85--> NOT input/output
+144->144
+3c746c3f--> NOT input/output
+64->64
+3c746c3f--> NOT input/output
+64->64
+1ca598bd--> NOT input/output
+64->64
+1ca598bd--> NOT input/output
+64->64
+03199a3c--> NOT input/output
+16384->16384
+03199a3c--> NOT input/output
+16384->16384
+760467ed--> NOT input/output
+16384->16384
+760467ed--> NOT input/output
+16384->16384
+23b5bc43--> NOT input/output
+4096->4096
+23b5bc43--> NOT input/output
+4096->4096
+d94b9109--> NOT input/output
+4096->4096
+d94b9109--> NOT input/output
+4096->4096
+638e0603--> NOT input/output
+4608->4608
+638e0603--> NOT input/output
+4608->4608
+25c7c7a6--> NOT input/output
+128->128
+25c7c7a6--> NOT input/output
+128->128
+e86bff88--> NOT input/output
+128->128
+e86bff88--> NOT input/output
+128->128
+836c7e65--> NOT input/output
+8192->8192
+836c7e65--> NOT input/output
+8192->8192
+7cf7f22c--> NOT input/output
+8192->8192
+7cf7f22c--> NOT input/output
+8192->8192
+c81104c8--> NOT input/output
+2048->2048
+c81104c8--> NOT input/output
+2048->2048
+c35ea084--> NOT input/output
+2048->2048
+c35ea084--> NOT input/output
+2048->2048
+c35ea084--> NOT input/output
+2048->2048
+33c8fac1--> NOT input/output
+13824->13824
+33c8fac1--> NOT input/output
+13824->13824
+33c8fac1--> NOT input/output
+4608->4608
+e2dc3723--> NOT input/output
+192->192
+e2dc3723--> NOT input/output
+192->192
+e2dc3723--> NOT input/output
+64->64
+42608b93--> NOT input/output
+192->192
+42608b93--> NOT input/output
+192->192
+42608b93--> NOT input/output
+64->64
+0b9802cf--> NOT input/output
+3072->3072
+0b9802cf--> NOT input/output
+3072->3072
+0b9802cf--> NOT input/output
+1024->1024
+fafa49bd--> NOT input/output
+4096->4096
+fafa49bd--> NOT input/output
+4096->4096
+94977b91--> NOT input/output
+1024->1024
+94977b91--> NOT input/output
+1024->1024
+8bf03aa5--> NOT input/output
+1024->1024
+8bf03aa5--> NOT input/output
+1024->1024
+8bf03aa5--> NOT input/output
+1024->1024
+8bf03aa5--> NOT input/output
+1024->1024
+8bf03aa5--> NOT input/output
+1024->1024
+8bf03aa5--> NOT input/output
+1024->1024
+8bf03aa5--> NOT input/output
+1024->1024
+f88e80c2--> NOT input/output
+12672->12672
+f88e80c2--> NOT input/output
+12672->12672
+f88e80c2--> NOT input/output
+12672->12672
+f88e80c2--> NOT input/output
+12672->12672
+f88e80c2--> NOT input/output
+12672->12672
+f88e80c2--> NOT input/output
+12672->12672
+f88e80c2--> NOT input/output
+10368->10368
+88b1ed6a--> NOT input/output
+88->96
+88b1ed6a--> NOT input/output
+88->96
+88b1ed6a--> NOT input/output
+88->96
+88b1ed6a--> NOT input/output
+88->96
+88b1ed6a--> NOT input/output
+88->96
+88b1ed6a--> NOT input/output
+88->96
+88b1ed6a--> NOT input/output
+72->80
+330520dc--> NOT input/output
+88->96
+330520dc--> NOT input/output
+88->96
+330520dc--> NOT input/output
+88->96
+330520dc--> NOT input/output
+88->96
+330520dc--> NOT input/output
+88->96
+330520dc--> NOT input/output
+88->96
+330520dc--> NOT input/output
+72->80
+e2d4de01--> NOT input/output
+352->352
+e2d4de01--> NOT input/output
+352->352
+e2d4de01--> NOT input/output
+352->352
+e2d4de01--> NOT input/output
+352->352
+e2d4de01--> NOT input/output
+352->352
+e2d4de01--> NOT input/output
+352->352
+e2d4de01--> NOT input/output
+288->288
+ae8a87fe--> NOT input/output
+2048->2048
+ae8a87fe--> NOT input/output
+2048->2048
+f2366cdd--> NOT input/output
+512->512
+f2366cdd--> NOT input/output
+512->512
+556250c9--> NOT input/output
+512->512
+556250c9--> NOT input/output
+512->512
+ec9c1bee--> NOT input/output
+512->512
+ec9c1bee--> NOT input/output
+512->512
+b79a01c6--> NOT input/output
+512->512
+b79a01c6--> NOT input/output
+512->512
+c7cbb43e--> NOT input/output
+5120->5120
+c7cbb43e--> NOT input/output
+5120->5120
+8ec98a3a--> NOT input/output
+40->48
+8ec98a3a--> NOT input/output
+40->48
+168cebbe--> NOT input/output
+40->48
+168cebbe--> NOT input/output
+40->48
+752732c6--> input/output
+10->10
+752732c6--> input/output
+10->10
+TransposeLayer(maps=[
+  TransposeParser [
+  PULPTransposeTemplate(int8_t) -> int8_t
+  PULPTransposeTemplate(uint8_t) -> uint8_t
+  PULPTransposeTemplate(int16_t) -> int16_t
+  PULPTransposeTemplate(uint16_t) -> uint16_t
+  PULPTransposeTemplate(int32_t) -> int32_t
+  PULPTransposeTemplate(uint32_t) -> uint32_t
+  PULPTransposeTemplate(int64_t) -> int64_t
+  PULPTransposeTemplate(uint64_t) -> uint64_t
+  PULPTransposeTemplate(float32_t) -> float32_t
+]
+])
+PULPRQSConvLayer(maps=[
+  PULPConv2DParser [
+  PULP2DConvTemplate(int8_t, int8_t, int32_t, int32_t, int32_t) -> int8_t
+  PULP2DConvTemplate(int8_t, int8_t, int32_t, int32_t, int32_t) -> uint8_t
+  PULP2DConvTemplate(uint8_t, int8_t, int32_t, int32_t, int32_t) -> int8_t
+  PULP2DConvTemplate(uint8_t, int8_t, int32_t, int32_t, int32_t) -> uint8_t
+]
+  PULPDWConv2DParser [
+  PULP2DDWConvTemplate(int8_t, int8_t, int32_t, int32_t, int32_t) -> int8_t
+  PULP2DDWConvTemplate(int8_t, int8_t, int32_t, int32_t, int32_t) -> uint8_t
+  PULP2DDWConvTemplate(uint8_t, int8_t, int32_t, int32_t, int32_t) -> int8_t
+  PULP2DDWConvTemplate(uint8_t, int8_t, int32_t, int32_t, int32_t) -> uint8_t
+]
+  PULPConv1DParser [
+  PULP1DConvTemplate(int8_t, int8_t, int32_t, int32_t) -> int8_t
+  PULP1DConvTemplate(uint8_t, int8_t, int32_t, int32_t) -> uint8_t
+]
+  PULPDWConv1DParser [
+  PULP1DDWConvTemplate(int8_t, int8_t, int32_t, int32_t) -> int8_t
+]
+])
+MaxPoolLayer(maps=[
+  MaxPool1DParser [
+  PULPMaxPoolTemplate(int8_t) -> int8_t
+  PULPMaxPoolTemplate(uint8_t) -> uint8_t
+]
+  MaxPool2DParser [
+  PULPMaxPoolTemplate(int8_t) -> int8_t
+  PULPMaxPoolTemplate(uint8_t) -> uint8_t
+  NodeTemplate(float32_t) -> float32_t
+]
+])
+PULPRQSConvLayer(maps=[
+  PULPConv2DParser [
+  PULP2DConvTemplate(int8_t, int8_t, int32_t, int32_t, int32_t) -> int8_t
+  PULP2DConvTemplate(int8_t, int8_t, int32_t, int32_t, int32_t) -> uint8_t
+  PULP2DConvTemplate(uint8_t, int8_t, int32_t, int32_t, int32_t) -> int8_t
+  PULP2DConvTemplate(uint8_t, int8_t, int32_t, int32_t, int32_t) -> uint8_t
+]
+  PULPDWConv2DParser [
+  PULP2DDWConvTemplate(int8_t, int8_t, int32_t, int32_t, int32_t) -> int8_t
+  PULP2DDWConvTemplate(int8_t, int8_t, int32_t, int32_t, int32_t) -> uint8_t
+  PULP2DDWConvTemplate(uint8_t, int8_t, int32_t, int32_t, int32_t) -> int8_t
+  PULP2DDWConvTemplate(uint8_t, int8_t, int32_t, int32_t, int32_t) -> uint8_t
+]
+  PULPConv1DParser [
+  PULP1DConvTemplate(int8_t, int8_t, int32_t, int32_t) -> int8_t
+  PULP1DConvTemplate(uint8_t, int8_t, int32_t, int32_t) -> uint8_t
+]
+  PULPDWConv1DParser [
+  PULP1DDWConvTemplate(int8_t, int8_t, int32_t, int32_t) -> int8_t
+]
+])
+MaxPoolLayer(maps=[
+  MaxPool1DParser [
+  PULPMaxPoolTemplate(int8_t) -> int8_t
+  PULPMaxPoolTemplate(uint8_t) -> uint8_t
+]
+  MaxPool2DParser [
+  PULPMaxPoolTemplate(int8_t) -> int8_t
+  PULPMaxPoolTemplate(uint8_t) -> uint8_t
+  NodeTemplate(float32_t) -> float32_t
+]
+])
+PULPRQSConvLayer(maps=[
+  PULPConv2DParser [
+  PULP2DConvTemplate(int8_t, int8_t, int32_t, int32_t, int32_t) -> int8_t
+  PULP2DConvTemplate(int8_t, int8_t, int32_t, int32_t, int32_t) -> uint8_t
+  PULP2DConvTemplate(uint8_t, int8_t, int32_t, int32_t, int32_t) -> int8_t
+  PULP2DConvTemplate(uint8_t, int8_t, int32_t, int32_t, int32_t) -> uint8_t
+]
+  PULPDWConv2DParser [
+  PULP2DDWConvTemplate(int8_t, int8_t, int32_t, int32_t, int32_t) -> int8_t
+  PULP2DDWConvTemplate(int8_t, int8_t, int32_t, int32_t, int32_t) -> uint8_t
+  PULP2DDWConvTemplate(uint8_t, int8_t, int32_t, int32_t, int32_t) -> int8_t
+  PULP2DDWConvTemplate(uint8_t, int8_t, int32_t, int32_t, int32_t) -> uint8_t
+]
+  PULPConv1DParser [
+  PULP1DConvTemplate(int8_t, int8_t, int32_t, int32_t) -> int8_t
+  PULP1DConvTemplate(uint8_t, int8_t, int32_t, int32_t) -> uint8_t
+]
+  PULPDWConv1DParser [
+  PULP1DDWConvTemplate(int8_t, int8_t, int32_t, int32_t) -> int8_t
+]
+])
+MaxPoolLayer(maps=[
+  MaxPool1DParser [
+  PULPMaxPoolTemplate(int8_t) -> int8_t
+  PULPMaxPoolTemplate(uint8_t) -> uint8_t
+]
+  MaxPool2DParser [
+  PULPMaxPoolTemplate(int8_t) -> int8_t
+  PULPMaxPoolTemplate(uint8_t) -> uint8_t
+  NodeTemplate(float32_t) -> float32_t
+]
+])
+PULPRQSConvLayer(maps=[
+  PULPConv2DParser [
+  PULP2DConvTemplate(int8_t, int8_t, int32_t, int32_t, int32_t) -> int8_t
+  PULP2DConvTemplate(int8_t, int8_t, int32_t, int32_t, int32_t) -> uint8_t
+  PULP2DConvTemplate(uint8_t, int8_t, int32_t, int32_t, int32_t) -> int8_t
+  PULP2DConvTemplate(uint8_t, int8_t, int32_t, int32_t, int32_t) -> uint8_t
+]
+  PULPDWConv2DParser [
+  PULP2DDWConvTemplate(int8_t, int8_t, int32_t, int32_t, int32_t) -> int8_t
+  PULP2DDWConvTemplate(int8_t, int8_t, int32_t, int32_t, int32_t) -> uint8_t
+  PULP2DDWConvTemplate(uint8_t, int8_t, int32_t, int32_t, int32_t) -> int8_t
+  PULP2DDWConvTemplate(uint8_t, int8_t, int32_t, int32_t, int32_t) -> uint8_t
+]
+  PULPConv1DParser [
+  PULP1DConvTemplate(int8_t, int8_t, int32_t, int32_t) -> int8_t
+  PULP1DConvTemplate(uint8_t, int8_t, int32_t, int32_t) -> uint8_t
+]
+  PULPDWConv1DParser [
+  PULP1DDWConvTemplate(int8_t, int8_t, int32_t, int32_t) -> int8_t
+]
+])
+MaxPoolLayer(maps=[
+  MaxPool1DParser [
+  PULPMaxPoolTemplate(int8_t) -> int8_t
+  PULPMaxPoolTemplate(uint8_t) -> uint8_t
+]
+  MaxPool2DParser [
+  PULPMaxPoolTemplate(int8_t) -> int8_t
+  PULPMaxPoolTemplate(uint8_t) -> uint8_t
+  NodeTemplate(float32_t) -> float32_t
+]
+])
+TransposeLayer(maps=[
+  TransposeParser [
+  PULPTransposeTemplate(int8_t) -> int8_t
+  PULPTransposeTemplate(uint8_t) -> uint8_t
+  PULPTransposeTemplate(int16_t) -> int16_t
+  PULPTransposeTemplate(uint16_t) -> uint16_t
+  PULPTransposeTemplate(int32_t) -> int32_t
+  PULPTransposeTemplate(uint32_t) -> uint32_t
+  PULPTransposeTemplate(int64_t) -> int64_t
+  PULPTransposeTemplate(uint64_t) -> uint64_t
+  PULPTransposeTemplate(float32_t) -> float32_t
+]
+])
+ReshapeLayer(maps=[
+  FlattenParser [
+  _ReshapeTemplate(int8_t, int64_t) -> int8_t
+  _ReshapeTemplate(uint8_t, int64_t) -> uint8_t
+  _ReshapeTemplate(int16_t, int64_t) -> int16_t
+  _ReshapeTemplate(uint16_t, int64_t) -> uint16_t
+  _ReshapeTemplate(int32_t, int64_t) -> int32_t
+  _ReshapeTemplate(uint32_t, int64_t) -> uint32_t
+  _ReshapeTemplate(int64_t, int64_t) -> int64_t
+  _ReshapeTemplate(uint64_t, int64_t) -> uint64_t
+  _ReshapeTemplate(bfloat16_t, int64_t) -> bfloat16_t
+  _ReshapeTemplate(float16_t, int64_t) -> float16_t
+  _ReshapeTemplate(float32_t, int64_t) -> float32_t
+  _ReshapeTemplate(float64_t, int64_t) -> float64_t
+]
+])
+PULPRQSGEMMLayer(maps=[
+  PULPMatrixVecParser [
+  _PULPMatrixVectorTemplate(int8_t, int8_t, int32_t, int32_t) -> int8_t
+]
+  PULPTallGEMMParser [
+  _PULPTallGEMMTemplate(int8_t, int8_t, int32_t, int32_t) -> int8_t
+]
+  PULPGEMMParser [
+  PULPGEMMTemplate(int8_t, int8_t, int32_t, int32_t) -> int8_t
+  PULPGEMMTemplate(uint8_t, int8_t, int32_t, int32_t) -> uint8_t
+  PULPGEMMTemplate(int8_t, int8_t, int32_t, int32_t) -> uint8_t
+  PULPGEMMTemplate(uint8_t, int8_t, int32_t, int32_t) -> int8_t
+]
+])
+-- Building for platform 'Siracusa'
+-- ============================= Project Configuration ============================
+-- [Deeploy]     platform               = Siracusa
+-- [Deeploy]     use_dma                = 1
+-- ================================================================================
+-- 
+-- ============================= Siracusa Configuration ============================
+-- [cMake  ]   ISA                    = rv32imf_xpulpv2
+-- [cMake  ]   Cluster Cores          = 8
+-- [cMake  ]   Fabric Controller      = 1
+-- [cMake  ]   Number of used cores   = 8
+-- ================================================================================
+-- 
+-- [PULP-NNX] Using the N-EUREKA accelerator.
+-- ============================= Simulation Configuration ============================
+-- [Simulator]   QuestaSim              = questa-2022.3
+-- [Simulator]   Verilator              = verilator-4.110
+-- [Simulator]   VCS                    = vcs-2020.12
+-- [Simulator]   banshee_simulation     = OFF
+-- [Simulator]   banshee_configuration  = 
+-- [Simulator]   gvsoc_simulation       = ON
+-- [Simulator]   banshee_stack_size     = 16777216
+-- [Simulator]   num_threads            = 1
+-- ================================================================================
+-- 
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /app/Deeploy/DeeployTest/TEST_SIRACUSA/build_master
+Consolidate compiler generated dependencies of target pulp-nnx
+[  1%] Built target pulp-nnx
+Consolidate compiler generated dependencies of target deeploybasic
+[  4%] Built target deeploybasic
+Scanning dependencies of target pulp-sdk
+Consolidate compiler generated dependencies of target pulp-sdk
+[  8%] Built target pulp-sdk
+Consolidate compiler generated dependencies of target pulp-nn-mixed
+[ 97%] Built target pulp-nn-mixed
+Consolidate compiler generated dependencies of target deeploypulp
+[100%] Built target deeploypulp
+Consolidate compiler generated dependencies of target network
+[100%] Building C object DeeployTest/CMakeFiles/network.dir/TEST_SIRACUSA/Tests/Models/CNN_Linear1/Network.c.obj
+
+[1m[96m═══════════════════════════════════════════════════════════════[0m
+[1m[96m                    Deeploy Test Configuration                 [0m
+[1m[96m═══════════════════════════════════════════════════════════════[0m
+
+[1mTest Configuration:[0m
+  Test Name           : CNN_Linear1
+  Test Directory      : /app/Deeploy/DeeployTest/Tests/Models/CNN_Linear1
+  Generation Directory: /app/Deeploy/DeeployTest/TEST_SIRACUSA/Tests/Models/CNN_Linear1
+  Build Directory     : /app/Deeploy/DeeployTest/TEST_SIRACUSA/build_master
+
+[1mPlatform Configuration:[0m
+  Platform            : Siracusa
+  Simulator           : gvsoc
+  Tiling Enabled      : Yes
+
+[1mBuild Configuration:[0m
+  Toolchain           : LLVM
+  Toolchain Directory : /app/install/llvm
+  CMake Arguments     : -DNUM_CORES=8
+
+[1mRuntime Configuration:[0m
+  Verbosity Level     : 0
+  Debug Mode          : Disabled
+  Generation Arguments: --defaultMemLevel=L2 --l1=24000 --memAllocStrategy=MiniMalloc --searchStrategy=random-max
+
+[1m[96m═══════════════════════════════════════════════════════════════[0m
+
+
+[91m✗ Test CNN_Linear1 FAILED with exception: Build failed for CNN_Linear1[0m
