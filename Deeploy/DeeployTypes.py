@@ -3126,28 +3126,27 @@ class NetworkContainer():
         str
             Hmac verification code for pulpopen
 
-        """
-
-        ret = """
-
-            /*\r\n
+        Bit 5 of parameter letter 1 flags a hmac verification task
 
         """
+
+        ret = ""
 
 
         globalObjs = list(self.ctxt.globalObjects.keys())
 
         for i in range(len(globalObjs)):
             if("hmac" in globalObjs[i]):
-                buffer = self.ctxt.lookup(globalObjs[i+1])
-                print(buffer)
                 
-                ret += f"""DeeployNetwork_{str(globalObjs[i+1])}-->DeeployNetwork_{str(globalObjs[i])} \r\n
-                        size_t n = sizeof(DeeployNetwork_{str(globalObjs[i+1])}) / sizeof(DeeployNetwork_{str(globalObjs[i+1])}[0]);
-
-"""
-
-        ret += """*/"""
+                ret += f"""
+                        //Signature verification for DeeployNetwork_{globalObjs[i+1]}
+                        cl_task.src = DeeployNetwork_{globalObjs[i+1]};
+                        cl_task.dst = DeeployNetwork_{globalObjs[i]};
+                        cl_task.size = sizeof(DeeployNetwork_{globalObjs[i+1]}) / sizeof(DeeployNetwork_{globalObjs[i+1]}[0]);
+                        mailbox_send(1,&cl_task, 32);
+                        mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
+                        wait_for_idma_transfer();
+                        """
 
         return ret
         
