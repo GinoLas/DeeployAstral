@@ -46,20 +46,24 @@ class MchanDma(AsyncDma):
                         //sha256 = ${sha256}
                         //bufferHash = ${bufferHash}
                         //cl_task.bufferHash = 0x${bufferHash};
-                        cl_task.transfer_id = 0x${sha256};
+                        //static uint32_t partial_size_${sha256} = 0;
+                        //mini_printf("Partial size for ${sha256} = %d\\r\\n",partial_size_${sha256}); // subtract this from src or dest in order to get original address
+                        cl_task.transfer_id = 0x${bufferHash};
                         cl_task.size = ${size};
                         cl_task.src = ${loc};
                         cl_task.dst = ${ext};
                         mailbox_send(1,&cl_task,${ot_flags});
                         mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
+                        //partial_size_${sha256} += cl_task.size;
                         wait_for_idma_transfer();
+
                         """),
         2: NodeTemplate("""
                         //sha256 = ${sha256}
                         //bufferHash = ${bufferHash}
                         //${size_1d}
                         //cl_task.bufferHash = 0x${bufferHash};
-                        cl_task.transfer_id = 0x${sha256};
+                        cl_task.transfer_id = 0x${bufferHash};
                         cl_task.size = ${size};
                         cl_task.src = ${loc};
                         cl_task.dst = ${ext};
@@ -166,11 +170,6 @@ class MchanDma(AsyncDma):
         
 
         operatorRepresentation["sha256"] = calcola_sha256(testo)[0:8]
-
-        print(operatorRepresentation["sha256"])
-
-        print(externalBuffer.name + "->" + str(externalBuffer.shape))
-        print(localBuffer.name + "->" + str(externalBuffer.shape))
 
 
         if transferRank == 2:   

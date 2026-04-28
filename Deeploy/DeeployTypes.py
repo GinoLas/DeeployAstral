@@ -29,6 +29,7 @@ from Deeploy.Logging import FAILURE_MARK, SUCCESS_MARK
 
 from .AbstractDataTypes import BaseType, FloatImmediate, IntegerImmediate, Pointer, PointerClass, Struct, VoidType
 
+
 Shape = TypeVar("Shape", bound = Any)
 SubGraph = List[gs.Node]
 Schedule = Union[List[SubGraph], SubGraph]
@@ -1086,6 +1087,24 @@ class NodeParser():
         """
 
         return ctxt, True
+    
+    @classmethod
+    def parseHmac(cls, ctxt: NetworkContext, node: gs.Node) -> NetworkContext:
+        if 'hmac' not in node.attrs:
+            return ctxt
+
+        hmac_values = np.array(node.attrs['hmac'].values, dtype=np.uint32)
+        
+
+        hmac_constant = gs.Constant(
+            name=f"{node.name}_hmac",
+            values=hmac_values
+        )
+
+        ctxt.hoistConstant(hmac_constant)
+
+        print("HMAC HOISTED!!!")        
+        return ctxt
 
     @classmethod
     def parseInputs(cls, ctxt: NetworkContext, node: gs.Node) -> NetworkContext:
@@ -1106,6 +1125,7 @@ class NodeParser():
 
         """
         data_in_buffers = []
+
         for inputNode in node.inputs:
             data_in = inputNode.name
 
@@ -1148,6 +1168,8 @@ class NodeParser():
                 nb = ctxt.lookup(name)
 
         return ctxt
+    
+
 
     @staticmethod
     def _unpack_const(attr) -> Union[int, float]:
@@ -1201,6 +1223,12 @@ class NodeParser():
 
         if not ret:
             return ctxt, False
+        
+        print("STO PARSANDO " + node.name)
+        
+        if('hmac' in node.attrs):
+            print("HMAC VIVE!!!")
+            self.parseHmac(ctxt,node)
 
         if ioParse:
             ctxt = ctxt.copy()
@@ -1231,6 +1259,8 @@ class NodeTypeChecker():
 
         self.input_types = input_types
         self.output_types = output_types
+
+        # print(input_types)
 
         self.typeDict: Dict[str, Type[Pointer]] = {
         }  #: Dict[str, Type[Pointer]]: Stores the type assignment of the input and output tensors, mapping them to the names defined by the NodeParser
@@ -1322,9 +1352,32 @@ class NodeTypeChecker():
                 else:
                     retCheck &= reference._type.referencedType == _type.referencedType
         return retCheck
+    
+    def typeInferHmacCtxt(self, ctxt: NetworkContext, node: gs.Node) -> NetworkContext:
+        print(type(node.attrs['hmac']))
+        inputNode = node.attrs['hmac']
+        for _type in self.input_types:
+            inputNode.name = f"{node.name}_hmac"
+            if isinstance(ctxt.lookup(inputNode.name), ConstantBuffer):
+                reference = ctxt.lookup(inputNode.name)
+                print("REFERENZIATO")
+                print(reference.values)
+                print(_type)
+                if not _type.referencedType.checkPromotion(reference.values):
+                    print("NOOOOOOOO")
+                    #raise Exception(f"Can't cast {reference} to {_type}!")
+                print("MO LO ANNOTO ")
+                ctxt.annotateType(f"{node.name}_hmac", PointerClass(BaseType("uint32_t",32)))
+                return ctxt
+        raise Exception(f"Can't cast {reference} to {_type}!")
+
+
+
 
     def typeInferGlobalCtxt(self, ctxt: NetworkContext, node: gs.Node) -> NetworkContext:
+
         for inputNode, _type in zip(node.inputs, self.input_types):
+            print(type(inputNode))
             if isinstance(ctxt.lookup(inputNode.name), ConstantBuffer):
                 reference = ctxt.lookup(inputNode.name)
                 if not _type.referencedType.checkPromotion(reference.values):
@@ -1383,6 +1436,8 @@ class NodeTypeChecker():
 
         newCtxt = self.typeInferGlobalCtxt(newCtxt, node)
         newCtxt = self.typeInferOutput(newCtxt, node, operatorRepresentation)
+        if("hmac" in node.attrs):
+            newCtxt = self.typeInferHmacCtxt(newCtxt,node)
         self.annotateDict(newCtxt, node, operatorRepresentation)
         return (newCtxt, True)
 
@@ -2797,7 +2852,6 @@ class NetworkContainer():
         callStack = ''
 
         for key, node in self.layerBinding.items():
-            print(node)
             self.ctxt, code = node.generate(self.ctxt)
 
             sections = reduce(lambda a, b: a + b, code, [])
@@ -3063,6 +3117,42 @@ class NetworkContainer():
             for include in engine.includeList:
                 includeStr += ["#include \"" + include + "\""]
         return ("\n").join(includeStr)
+    
+    def generateSignatureVeriricationCode(self) -> str:
+        """Generate hmac verification code for PULPOpen
+
+        Returns 
+        -------
+        str
+            Hmac verification code for pulpopen
+
+        """
+
+        ret = """
+
+            /*\r\n
+
+        """
+
+
+        globalObjs = list(self.ctxt.globalObjects.keys())
+
+        for i in range(len(globalObjs)):
+            if("hmac" in globalObjs[i]):
+                buffer = self.ctxt.lookup(globalObjs[i+1])
+                print(buffer)
+                
+                ret += f"""DeeployNetwork_{str(globalObjs[i+1])}-->DeeployNetwork_{str(globalObjs[i])} \r\n
+                        size_t n = sizeof(DeeployNetwork_{str(globalObjs[i+1])}) / sizeof(DeeployNetwork_{str(globalObjs[i+1])}[0]);
+
+"""
+
+        ret += """*/"""
+
+        return ret
+        
+
+                
 
     def generateEngineInitializationCode(self) -> str:
         """Generate initialization code for all compute engines

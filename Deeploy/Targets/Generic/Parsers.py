@@ -1235,6 +1235,7 @@ class ConvParser(NodeParser):
             'group' in node.attrs,
             'pads' in node.attrs,
             'strides' in node.attrs,
+            'hmac' in node.attrs,
             len(node.outputs) == 1,
         ])
 
@@ -1243,6 +1244,10 @@ class ConvParser(NodeParser):
             self.operatorRepresentation['pads'] = node.attrs['pads']
             self.operatorRepresentation['strides'] = node.attrs['strides']
             self.operatorRepresentation['dilations'] = node.attrs['dilations']
+            self.operatorRepresentation['hmac'] = node.attrs['hmac']
+
+            # print("OPERATOR REPR")
+            # print(self.operatorRepresentation)
 
         return wellFormed
 
@@ -1253,6 +1258,13 @@ class ConvParser(NodeParser):
 
         inputs = ['data_in', 'weight']
         outputs = ['data_out']
+
+        # if('hmac' in node.attrs):
+        #     self.operatorRepresentation['hmac'] = ctxt.lookup(node.attrs['hmac'].name).name
+        #     hmacTensor = gs.Constant(f'{node.name}_Hmac_Tensor', values = node.attrs['hmac'].values)
+        #     ctxt.hoistConstant(hmacTensor)
+        
+        
 
         for idx, inputNode in enumerate(node.inputs):
             if idx < len(inputs):
@@ -1485,6 +1497,7 @@ class MHSAParser(NodeParser):
             self.operatorRepresentation['dim_head'] = int(node.attrs['dim_head'])  # Projection Size
             self.operatorRepresentation['heads'] = int(node.attrs['heads'])
             self.operatorRepresentation['signed'] = int(node.attrs['signed'])
+            self.operatorRepresentation['hmac'] = node.attrs['hmac']
 
         return ret
 
@@ -1498,6 +1511,7 @@ class MHSAParser(NodeParser):
             'wo_bias'
         ]
         outputs = ['data_out']
+
 
         for idx, inputNode in enumerate(node.inputs):
             self.operatorRepresentation[inputs[idx]] = ctxt.lookup(inputNode.name).name
