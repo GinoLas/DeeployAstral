@@ -515,6 +515,17 @@ class _ReferenceBuffer(VariableBuffer):
 
     def __repr__(self) -> str:
         return self.__str__()
+    
+
+class HmacAssociation():
+    def __init__(self,
+                 buffer : Type[ConstantBuffer],
+                 hmac : Type[ConstantBuffer],
+                 size : int
+                 ):
+        self.buffer = buffer 
+        self.hmac = hmac 
+        self.size = size
 
 
 class NetworkContext():
@@ -530,9 +541,11 @@ class NetworkContext():
                  transientBuffer: Type[TransientBuffer],
                  globalObjects: Optional[OrderedDict] = None,
                  localObjects: Optional[OrderedDict] = None,
+                 hmacAssociations : Optional[list[HmacAssociation]] = None,
                  name: str = 'DeeployNetwork'):
         self.globalObjects = globalObjects if globalObjects is not None else OrderedDict()
         self.localObjects = localObjects if localObjects is not None else OrderedDict()
+        self.hmacAssociations = hmacAssociations if hmacAssociations is not None else []
         self.VariableBuffer = variableBuffer
         self.ConstantBuffer = constantBuffer
         self.StructBuffer = structBuffer
@@ -541,6 +554,9 @@ class NetworkContext():
 
         self._maxDynamicSize = {}  #: int: Maximum dynamic memory size occupied by live buffers at any point in time
         self._dynamicSize = {}  #: int: Current dynamic memory size occupied by live buffers
+
+    def addHmacAssociation(self,buffer, hmac, size):
+        self.hmacAssociations.append(HmacAssociation(buffer,hmac,size))
 
     def dealiasBuffer(self, name: str) -> str:
         """Function to find the underlying aliased VariableBuffer
@@ -1103,7 +1119,6 @@ class NodeParser():
 
         ctxt.hoistConstant(hmac_constant)
 
-        print("HMAC HOISTED!!!")        
         return ctxt
 
     @classmethod
@@ -1224,16 +1239,17 @@ class NodeParser():
         if not ret:
             return ctxt, False
         
-        print("STO PARSANDO " + node.name)
         
-        if('hmac' in node.attrs):
-            print("HMAC VIVE!!!")
-            self.parseHmac(ctxt,node)
 
         if ioParse:
             ctxt = ctxt.copy()
             ctxt = self.parseInputs(ctxt, node)
             ctxt = self.parseOutputs(ctxt, node)
+
+        if('hmac' in node.attrs):
+            self.parseHmac(ctxt,node)
+
+
 
         return ctxt, True
 
@@ -1354,30 +1370,23 @@ class NodeTypeChecker():
         return retCheck
     
     def typeInferHmacCtxt(self, ctxt: NetworkContext, node: gs.Node) -> NetworkContext:
-        print(type(node.attrs['hmac']))
         inputNode = node.attrs['hmac']
-        for _type in self.input_types:
-            inputNode.name = f"{node.name}_hmac"
-            if isinstance(ctxt.lookup(inputNode.name), ConstantBuffer):
-                reference = ctxt.lookup(inputNode.name)
-                print("REFERENZIATO")
-                print(reference.values)
-                print(_type)
-                if not _type.referencedType.checkPromotion(reference.values):
-                    print("NOOOOOOOO")
-                    #raise Exception(f"Can't cast {reference} to {_type}!")
-                print("MO LO ANNOTO ")
+        inputNode.name = f"{node.name}_hmac"
+        if isinstance(ctxt.lookup(inputNode.name), ConstantBuffer):
+            reference = ctxt.lookup(inputNode.name)
+
+            _type = PointerClass(BaseType("uint32_t",32))
+
+            if not _type.referencedType.checkPromotion(reference.values):
+                raise Exception(f"Can't cast {reference} to {_type}!")
+            else:
                 ctxt.annotateType(f"{node.name}_hmac", PointerClass(BaseType("uint32_t",32)))
-                return ctxt
-        raise Exception(f"Can't cast {reference} to {_type}!")
 
-
-
+        return ctxt
 
     def typeInferGlobalCtxt(self, ctxt: NetworkContext, node: gs.Node) -> NetworkContext:
 
         for inputNode, _type in zip(node.inputs, self.input_types):
-            print(type(inputNode))
             if isinstance(ctxt.lookup(inputNode.name), ConstantBuffer):
                 reference = ctxt.lookup(inputNode.name)
                 if not _type.referencedType.checkPromotion(reference.values):
@@ -1438,8 +1447,20 @@ class NodeTypeChecker():
         newCtxt = self.typeInferOutput(newCtxt, node, operatorRepresentation)
         if("hmac" in node.attrs):
             newCtxt = self.typeInferHmacCtxt(newCtxt,node)
+            newCtxt = self.bindHmac(newCtxt,node)
         self.annotateDict(newCtxt, node, operatorRepresentation)
         return (newCtxt, True)
+    
+    def bindHmac(self,ctxt : NetworkContext,node : gs.Node) -> NetworkContext:
+        hmac_name = f"{node.name}_hmac"
+        weights = ctxt.lookup(node.inputs[1].name)
+        ctxt.addHmacAssociation(weights.name,hmac_name,math.prod(weights.shape) * weights._type.referencedType.typeWidth//8)
+        # print(weights.name)
+        # print(weights.shape)
+        # print(weights._type.referencedType.typeWidth)
+        # print(math.prod(weights.shape) * weights._type.referencedType.typeWidth//8)
+        return ctxt
+
 
     def signature(self) -> str:
         input_types_str = ", ".join([_type.referencedType.typeName for _type in self.input_types])
@@ -3126,24 +3147,23 @@ class NetworkContainer():
         str
             Hmac verification code for pulpopen
 
-        Bit 5 of parameter letter 1 flags a hmac verification task
+        Bit 6 of parameter letter 1 flags a hmac verification task
 
         """
 
-        ret = ""
+        ret = "//Weights hmac verification"
 
 
-        globalObjs = list(self.ctxt.globalObjects.keys())
+        HmacAssociations = self.ctxt.hmacAssociations
 
-        for i in range(len(globalObjs)):
-            if("hmac" in globalObjs[i]):
+        for a in HmacAssociations:
                 
                 ret += f"""
-                        //Signature verification for DeeployNetwork_{globalObjs[i+1]}
-                        cl_task.src = DeeployNetwork_{globalObjs[i+1]};
-                        cl_task.dst = DeeployNetwork_{globalObjs[i]};
-                        cl_task.size = sizeof(DeeployNetwork_{globalObjs[i+1]}) / sizeof(DeeployNetwork_{globalObjs[i+1]}[0]);
-                        mailbox_send(1,&cl_task, 32);
+                        //Signature verification for DeeployNetwork_{a.buffer}
+                        cl_task.src = DeeployNetwork_{a.buffer};
+                        cl_task.dst = DeeployNetwork_{a.hmac};
+                        cl_task.size = {a.size};
+                        mailbox_send(1,&cl_task, 64);
                         mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
                         wait_for_idma_transfer();
                         """
