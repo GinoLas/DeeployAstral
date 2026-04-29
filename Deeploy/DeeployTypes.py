@@ -16,6 +16,10 @@ from dataclasses import dataclass
 from functools import reduce
 from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Set, Tuple, Type, TypeVar, Union
 
+from .CryptoONNX import ONNXEncryptor
+
+
+
 import mako
 import numpy as np
 import onnx
@@ -1108,16 +1112,17 @@ class NodeParser():
     def parseHmac(cls, ctxt: NetworkContext, node: gs.Node) -> NetworkContext:
         if 'hmac' not in node.attrs:
             return ctxt
-
-        hmac_values = np.array(node.attrs['hmac'].values, dtype=np.uint32)
+        
+        print(node.name)
+        
+        for input in node.inputs:
+            if(isinstance(input,gs.Constant) and not ctxt.is_global(f"{input.name}_hmac")):
+                hmac = node.attrs[(f"{input.name}_hmac")]
+                print(hmac.name)
+                ctxt.hoistConstant(hmac)
+            
         
 
-        hmac_constant = gs.Constant(
-            name=f"{node.name}_hmac",
-            values=hmac_values
-        )
-
-        ctxt.hoistConstant(hmac_constant)
 
         return ctxt
 
@@ -1251,6 +1256,7 @@ class NodeParser():
 
 
 
+
         return ctxt, True
 
 
@@ -1370,17 +1376,19 @@ class NodeTypeChecker():
         return retCheck
     
     def typeInferHmacCtxt(self, ctxt: NetworkContext, node: gs.Node) -> NetworkContext:
-        inputNode = node.attrs['hmac']
-        inputNode.name = f"{node.name}_hmac"
-        if isinstance(ctxt.lookup(inputNode.name), ConstantBuffer):
-            reference = ctxt.lookup(inputNode.name)
+        for input in node.inputs:
+            if(isinstance(input,gs.Constant)):
+                if isinstance(ctxt.lookup(f"{input.name}_hmac"), ConstantBuffer):
+                    reference = ctxt.lookup(f"{input.name}_hmac")
 
-            _type = PointerClass(BaseType("uint32_t",32))
+                    _type = PointerClass(BaseType("uint32_t",32))
 
-            if not _type.referencedType.checkPromotion(reference.values):
-                raise Exception(f"Can't cast {reference} to {_type}!")
-            else:
-                ctxt.annotateType(f"{node.name}_hmac", PointerClass(BaseType("uint32_t",32)))
+                    if not _type.referencedType.checkPromotion(reference.values):
+                        raise Exception(f"Can't cast {reference} to {_type}!")
+                    else:
+                        ctxt.annotateType(f"{input.name}_hmac", PointerClass(BaseType("uint32_t",32)))
+
+            
 
         return ctxt
 
@@ -1452,13 +1460,10 @@ class NodeTypeChecker():
         return (newCtxt, True)
     
     def bindHmac(self,ctxt : NetworkContext,node : gs.Node) -> NetworkContext:
-        hmac_name = f"{node.name}_hmac"
-        weights = ctxt.lookup(node.inputs[1].name)
-        ctxt.addHmacAssociation(weights.name,hmac_name,math.prod(weights.shape) * weights._type.referencedType.typeWidth//8)
-        # print(weights.name)
-        # print(weights.shape)
-        # print(weights._type.referencedType.typeWidth)
-        # print(math.prod(weights.shape) * weights._type.referencedType.typeWidth//8)
+        constant_inputs = list(filter(lambda x : isinstance(x,gs.Constant),node.inputs))
+        for input in constant_inputs:
+            ctxt_input = ctxt.lookup(input.name)
+            ctxt.addHmacAssociation(ctxt_input.name,f"{ctxt_input.name}_hmac",math.prod(input.shape) * ctxt_input._type.referencedType.typeWidth//8)
         return ctxt
 
 
@@ -3154,9 +3159,12 @@ class NetworkContainer():
         ret = "//Weights hmac verification"
 
 
-        HmacAssociations = self.ctxt.hmacAssociations
+        hmacAssociations = self.ctxt.hmacAssociations
 
-        for a in HmacAssociations:
+        if(len(hmacAssociations) == 0):
+            return ""
+
+        for a in hmacAssociations:
                 
                 ret += f"""
                         //Signature verification for DeeployNetwork_{a.buffer}
@@ -3549,6 +3557,21 @@ class NetworkDeployer(NetworkContainer):
 
         log.info("- Perform Graph Lowering")
         self.graph = self.lower(self.graph)  # This lowers the graph to a deployable format
+
+
+        key = "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+        hmac_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        nonce = "000000000000000000000000CACACACA"
+
+        print("Setting up encryptor")
+
+        encryptor = ONNXEncryptor(key,hmac_key,nonce)
+
+        print("Encrypting network")
+
+        self.graph = encryptor.process_graph(self.graph)
+
+        print("Network encrypted")
 
         log.info(f"> Export State {_middlewarePostLoweringFilename}[.onnx|.pkl]")
         self.exportDeeployState(self.deeployStateDir, _middlewarePostLoweringFilename)

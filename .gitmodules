@@ -11,3 +11,6 @@
 [submodule "CMSIS-NN"]
 	path = TargetLibraries/CMSIS/third_party/CMSIS-NN
 	url = https://github.com/ARM-software/CMSIS-NN.git
+[submodule "Deeploy/CryptoONNX"]
+	path = Deeploy/CryptoONNX
+	url = https://github.com/GinoLas/CryptONNX

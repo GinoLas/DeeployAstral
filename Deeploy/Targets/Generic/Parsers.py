@@ -1235,7 +1235,6 @@ class ConvParser(NodeParser):
             'group' in node.attrs,
             'pads' in node.attrs,
             'strides' in node.attrs,
-            'hmac' in node.attrs,
             len(node.outputs) == 1,
         ])
 
@@ -1244,7 +1243,6 @@ class ConvParser(NodeParser):
             self.operatorRepresentation['pads'] = node.attrs['pads']
             self.operatorRepresentation['strides'] = node.attrs['strides']
             self.operatorRepresentation['dilations'] = node.attrs['dilations']
-            self.operatorRepresentation['hmac'] = node.attrs['hmac']
 
             # print("OPERATOR REPR")
             # print(self.operatorRepresentation)
