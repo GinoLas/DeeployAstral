@@ -6,7 +6,7 @@ import hashlib
 import math
 from typing import Dict, Tuple
 
-from Deeploy.DeeployTypes import NetworkContext, NodeTemplate, OperatorRepresentation, VariableBuffer, TransientBuffer
+from Deeploy.DeeployTypes import NetworkContext, NodeTemplate, OperatorRepresentation, VariableBuffer, TransientBuffer, ConstantBuffer
 from Deeploy.TilingExtension.AsyncDma import AsyncDma, DirectionWaitingStrategy, DmaDirection, Future
 
 counter = 0
@@ -45,13 +45,21 @@ class MchanDma(AsyncDma):
         1: NodeTemplate("""
                         //sha256 = ${sha256}
                         //bufferHash = ${bufferHash}
-                        //cl_task.bufferHash = 0x${bufferHash};
-                        //static uint32_t partial_size_${sha256} = 0;
-                        //mini_printf("Partial size for ${sha256} = %d\\r\\n",partial_size_${sha256}); // subtract this from src or dest in order to get original address
-                        cl_task.transfer_id = 0x${bufferHash};
+                        static uint32_t src_key_${sha256};
+                        static uint32_t dst_key_${sha256};
+                        static bool key_set_${sha256};
+                        if(TILING_I == 0 && key_set_${sha256}){
+                            src_key_${sha256} = ${loc};
+                            dst_key_${sha256} = ${ext};
+                            key_set_${sha256} = true;
+                        }
+                        cl_task.transfer_id = 0x${sha256};
                         cl_task.size = ${size};
                         cl_task.src = ${loc};
                         cl_task.dst = ${ext};
+                        //Hashmap keys 
+                        cl_task.src_key = src_key_${sha256};
+                        cl_task.dst_key = dst_key_${sha256};
                         mailbox_send(1,&cl_task,${ot_flags});
                         mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
                         //partial_size_${sha256} += cl_task.size;
@@ -63,7 +71,15 @@ class MchanDma(AsyncDma):
                         //bufferHash = ${bufferHash}
                         //${size_1d}
                         //cl_task.bufferHash = 0x${bufferHash};
-                        cl_task.transfer_id = 0x${bufferHash};
+                        static uint32_t src_key_${sha256};
+                        static uint32_t dst_key_${sha256};
+                        static bool key_set_${sha256};
+                        if(TILING_I == 0 && key_set_${sha256}){
+                            src_key_${sha256} = ${loc};
+                            dst_key_${sha256} = ${ext};
+                            key_set_${sha256} = true;
+                        }
+                        cl_task.transfer_id = 0x${sha256};
                         cl_task.size = ${size};
                         cl_task.src = ${loc};
                         cl_task.dst = ${ext};
@@ -71,6 +87,8 @@ class MchanDma(AsyncDma):
                         cl_task.dst_stride = ${stride_2d};
                         cl_task.repetitions = ${repetitions};
                         cl_task.size_1d = ${size_1d};
+                        cl_task.src_key = src_key_${sha256};
+                        cl_task.dst_key = dst_key_${sha256};
                         mailbox_send(1,&cl_task,${ot_flags});
                         mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
                         wait_for_idma_transfer();
@@ -105,12 +123,6 @@ class MchanDma(AsyncDma):
         is_output = ctxt.lookup(externalBuffer._referenceName).is_output or ctxt.lookup(localBuffer._referenceName).is_output
 
         transferRank = len(shape)
-
-
-
-
-
-
 
         mchanFlags = 0
         mchanFlags += (1 << 0) if direction == "ExternalToLocal" else 0  # direction
@@ -178,7 +190,8 @@ class MchanDma(AsyncDma):
             operatorRepresentation["size_1d"] = shape[1]
             operatorRepresentation["stride_2d"] = strideExt[0]
 
-        if("weight" in externalBuffer.name or "weight" in localBuffer.name):
+        # if("weight" in externalBuffer.name or "weight" in localBuffer.name):
+        if(isinstance(ctxt.lookup(externalBuffer._referenceName),ConstantBuffer)):
             OTflags += (1 << 1)
 
         old_size = mchanTransferSize
@@ -187,8 +200,8 @@ class MchanDma(AsyncDma):
         if( (not is_input) and (not is_output)):
             if(mchanTransferSize % 16 != 0):
                 mchanTransferSize += 16 - mchanTransferSize%16
-            if("mul_tensor" not in externalBuffer.name and "add_tensor" not in externalBuffer.name):
-                OTflags += (1 << 3)
+            # if("mul_tensor" not in externalBuffer.name and "add_tensor" not in externalBuffer.name):
+            OTflags += (1 << 3)
             # print(operatorRepresentation["sha256"]+ "-->" + " NOT input/output")
         # else:
             # print(operatorRepresentation["sha256"]+ "-->" + " input/output")

@@ -1149,6 +1149,8 @@ class NodeParser():
         for inputNode in node.inputs:
             data_in = inputNode.name
 
+            print(f"INPUT : {data_in}")
+
             # Hoist constant inputs
             if type(inputNode) == gs.ir.tensor.Constant and not ctxt.is_global(data_in):
                 ctxt.hoistConstant(inputNode)

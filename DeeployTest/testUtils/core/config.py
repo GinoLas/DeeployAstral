@@ -24,6 +24,7 @@ class DeeployTestConfig:
     gen_args: List[str] = None
     verbose: int = 0
     debug: bool = False
+    enc : bool = False
 
     def __post_init__(self):
         if self.cmake_args is None:

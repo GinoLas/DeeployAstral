@@ -41,6 +41,8 @@ def generate_network(config: DeeployTestConfig, skip: bool = False) -> None:
         config.test_dir,
         "-p",
         config.platform,
+        # "-enc",
+        # config.enc
     ]
 
     # Add verbosity flags

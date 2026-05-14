@@ -47,6 +47,12 @@ class DeeployRunnerArgumentParser(argparse.ArgumentParser):
 
         self.tiling_arguments = tiling_arguments
 
+        self.add_argument('-e',
+                          metavar='<encrypt>',
+                          type = int,
+                          required = True,
+                          help = 'True = perform encryption of network, False = Deeploy a plain / already encrypted network')
+
         self.add_argument('-t',
                           metavar = '<dir>',
                           dest = 'dir',
@@ -182,7 +188,6 @@ def create_config_from_args(args: argparse.Namespace,
                             simulator: str,
                             tiling: bool,
                             platform_specific_cmake_args: Optional[list] = None) -> DeeployTestConfig:
-
     script_path = Path(__file__).resolve()
     base_dir = script_path.parent.parent
 
@@ -250,6 +255,7 @@ def create_config_from_args(args: argparse.Namespace,
         gen_args = gen_args_list,
         verbose = args.verbose,
         debug = args.debug,
+        enc = args.e > 0
     )
 
     return config
