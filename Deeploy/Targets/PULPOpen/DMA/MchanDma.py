@@ -45,21 +45,11 @@ class MchanDma(AsyncDma):
         1: NodeTemplate("""
                         //sha256 = ${sha256}
                         //bufferHash = ${bufferHash}
-                        static uint32_t src_key_${sha256};
-                        static uint32_t dst_key_${sha256};
-                        static bool key_set_${sha256};
-                        if(TILING_I == 0 && key_set_${sha256}){
-                            src_key_${sha256} = ${loc};
-                            dst_key_${sha256} = ${ext};
-                            key_set_${sha256} = true;
-                        }
                         cl_task.transfer_id = 0x${sha256};
                         cl_task.size = ${size};
                         cl_task.src = ${loc};
                         cl_task.dst = ${ext};
                         //Hashmap keys 
-                        cl_task.src_key = src_key_${sha256};
-                        cl_task.dst_key = dst_key_${sha256};
                         mailbox_send(1,&cl_task,${ot_flags});
                         mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
                         //partial_size_${sha256} += cl_task.size;
@@ -71,14 +61,6 @@ class MchanDma(AsyncDma):
                         //bufferHash = ${bufferHash}
                         //${size_1d}
                         //cl_task.bufferHash = 0x${bufferHash};
-                        static uint32_t src_key_${sha256};
-                        static uint32_t dst_key_${sha256};
-                        static bool key_set_${sha256};
-                        if(TILING_I == 0 && key_set_${sha256}){
-                            src_key_${sha256} = ${loc};
-                            dst_key_${sha256} = ${ext};
-                            key_set_${sha256} = true;
-                        }
                         cl_task.transfer_id = 0x${sha256};
                         cl_task.size = ${size};
                         cl_task.src = ${loc};
@@ -87,8 +69,6 @@ class MchanDma(AsyncDma):
                         cl_task.dst_stride = ${stride_2d};
                         cl_task.repetitions = ${repetitions};
                         cl_task.size_1d = ${size_1d};
-                        cl_task.src_key = src_key_${sha256};
-                        cl_task.dst_key = dst_key_${sha256};
                         mailbox_send(1,&cl_task,${ot_flags});
                         mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
                         wait_for_idma_transfer();
