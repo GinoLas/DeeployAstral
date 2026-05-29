@@ -61,9 +61,9 @@ class TilingCodeGeneration(CodeTransformationPass, IntrospectiveCodeTransformati
     // CLOSE TILING LOOP
     }
     *${tileIdxPtr} += 1;
-    mailbox_send(1,0,48);
-    mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
-    wait_for_idma_transfer();
+    //mailbox_send(1,0,48);
+    //mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
+    //wait_for_idma_transfer();
     """)
 
     @abstractmethod

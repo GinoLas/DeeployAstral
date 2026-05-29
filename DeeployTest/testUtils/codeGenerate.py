@@ -196,6 +196,10 @@ def generateTestNetworkImplementation(deployer: NetworkDeployer, verbosityCfg: C
             mailbox_send(1, 0, 16);
             mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
             wait_for_idma_transfer();
+
+            mailbox_send(1,0,48);
+            mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
+            wait_for_idma_transfer();
         """
     else:
         retStr += """
