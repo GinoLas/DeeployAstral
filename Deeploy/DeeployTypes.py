@@ -526,11 +526,15 @@ class HmacAssociation():
     def __init__(self,
                  buffer : Type[ConstantBuffer],
                  hmac : Type[ConstantBuffer],
+                 iv : Type[ConstantBuffer],
                  size : int
                  ):
         self.buffer = buffer 
         self.hmac = hmac 
+        self.iv = iv
         self.size = size
+
+
 
 
 class NetworkContext():
@@ -560,8 +564,8 @@ class NetworkContext():
         self._maxDynamicSize = {}  #: int: Maximum dynamic memory size occupied by live buffers at any point in time
         self._dynamicSize = {}  #: int: Current dynamic memory size occupied by live buffers
 
-    def addHmacAssociation(self,buffer, hmac, size):
-        self.hmacAssociations.append(HmacAssociation(buffer,hmac,size))
+    def addHmacAssociation(self,buffer, hmac, iv,size):
+        self.hmacAssociations.append(HmacAssociation(buffer,hmac,iv,size))
 
     def dealiasBuffer(self, name: str) -> str:
         """Function to find the underlying aliased VariableBuffer
@@ -1118,13 +1122,13 @@ class NodeParser():
         
         for input in node.inputs:
             if(isinstance(input,gs.Constant) and not ctxt.is_global(f"{input.name}_hmac")):
+                print("Found hmac")
                 hmac = node.attrs[(f"{input.name}_hmac")]
-                print(hmac.name)
                 ctxt.hoistConstant(hmac)
-            
-        
-
-
+            if (isinstance(input,gs.Constant) and not ctxt.is_global(f"{input.name}_iv")):
+                print("Found iv")
+                iv = node.attrs[(f"{input.name}_iv")]
+                ctxt.hoistConstant(iv)
         return ctxt
 
     @classmethod
@@ -1390,9 +1394,20 @@ class NodeTypeChecker():
                         raise Exception(f"Can't cast {reference} to {_type}!")
                     else:
                         ctxt.annotateType(f"{input.name}_hmac", PointerClass(BaseType("uint32_t",32)))
+        return ctxt
 
-            
+    def typeInferIvCtxt(self, ctxt: NetworkContext, node: gs.Node) -> NetworkContext:
+        for input in node.inputs:
+            if(isinstance(input,gs.Constant)):
+                if isinstance(ctxt.lookup(f"{input.name}_iv"), ConstantBuffer):
+                    reference = ctxt.lookup(f"{input.name}_iv")
 
+                    _type = PointerClass(BaseType("uint32_t",32))
+
+                    if not _type.referencedType.checkPromotion(reference.values):
+                        raise Exception(f"Can't cast {reference} to {_type}!")
+                    else:
+                        ctxt.annotateType(f"{input.name}_iv", PointerClass(BaseType("uint32_t",32)))
         return ctxt
 
     def typeInferGlobalCtxt(self, ctxt: NetworkContext, node: gs.Node) -> NetworkContext:
@@ -1458,6 +1473,7 @@ class NodeTypeChecker():
         newCtxt = self.typeInferOutput(newCtxt, node, operatorRepresentation)
         if("hmac" in node.attrs):
             newCtxt = self.typeInferHmacCtxt(newCtxt,node)
+            newCtxt = self.typeInferIvCtxt(newCtxt,node)
             newCtxt = self.bindHmac(newCtxt,node)
         self.annotateDict(newCtxt, node, operatorRepresentation)
         return (newCtxt, True)
@@ -1466,7 +1482,7 @@ class NodeTypeChecker():
         constant_inputs = list(filter(lambda x : isinstance(x,gs.Constant),node.inputs))
         for input in constant_inputs:
             ctxt_input = ctxt.lookup(input.name)
-            ctxt.addHmacAssociation(ctxt_input.name,f"{ctxt_input.name}_hmac",math.prod(input.shape) * ctxt_input._type.referencedType.typeWidth//8)
+            ctxt.addHmacAssociation(ctxt_input.name,f"{ctxt_input.name}_hmac",f"{ctxt_input.name}_iv",math.prod(input.shape) * ctxt_input._type.referencedType.typeWidth//8)
         return ctxt
 
 
@@ -3255,6 +3271,14 @@ class NetworkContainer():
                         mailbox_send(1,&cl_task, 64);
                         mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
                         wait_for_idma_transfer();
+
+                        //IV binding for DeeployNetwork_{a.buffer}
+                        cl_task.src = DeeployNetwork_{a.buffer};
+                        cl_task.dst = DeeployNetwork_{a.iv};
+                        cl_task.size = 0;
+                        mailbox_send(1,&cl_task, 64);
+                        mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
+                        wait_for_idma_transfer();
                         """
 
         return ret
@@ -3642,11 +3666,11 @@ class NetworkDeployer(NetworkContainer):
 
         key = "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
         hmac_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-        nonce = "000000000000000000000000CACACACA"
+        # nonce = "000000000000000000000000CACACACA"
 
         print("Setting up encryptor")
 
-        encryptor = ONNXEncryptor(key,hmac_key,nonce)
+        encryptor = ONNXEncryptor(key,hmac_key)
 
         print("Encrypting network")
 
