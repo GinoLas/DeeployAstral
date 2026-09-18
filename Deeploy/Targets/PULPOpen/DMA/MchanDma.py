@@ -23,6 +23,7 @@ class MchanChannelFuture(Future):
     _allocTemplate = NodeTemplate("")
 
     _waitTemplate = NodeTemplate("""
+    wait_for_idma_transfer();
 """)
     
 
@@ -53,7 +54,7 @@ class MchanDma(AsyncDma):
                         mailbox_send(1,&cl_task,${ot_flags});
                         mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
                         //partial_size_${sha256} += cl_task.size;
-                        wait_for_idma_transfer();
+                        //wait_for_idma_transfer();
 
                         """),
         2: NodeTemplate("""
@@ -71,7 +72,7 @@ class MchanDma(AsyncDma):
                         cl_task.size_1d = ${size_1d};
                         mailbox_send(1,&cl_task,${ot_flags});
                         mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
-                        wait_for_idma_transfer();
+                        //wait_for_idma_transfer();
                         """),
     }
     _waitingStrategy = DirectionWaitingStrategy(MchanChannelFuture, "channel")

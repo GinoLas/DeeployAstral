@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from functools import reduce
 from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Set, Tuple, Type, TypeVar, Union
 
-from .CryptoONNX import ONNXEncryptor
+from .CryptONNX import ONNXEncryptor
 
 
 
@@ -1131,6 +1131,10 @@ class NodeParser():
                 ctxt.hoistConstant(iv)
         return ctxt
 
+
+    
+
+
     @classmethod
     def parseInputs(cls, ctxt: NetworkContext, node: gs.Node) -> NetworkContext:
         """DONT OVERRIDE - Takes care of hoisting IO tensors into the NetworkContext. Also verifies
@@ -1402,12 +1406,12 @@ class NodeTypeChecker():
                 if isinstance(ctxt.lookup(f"{input.name}_iv"), ConstantBuffer):
                     reference = ctxt.lookup(f"{input.name}_iv")
 
-                    _type = PointerClass(BaseType("uint32_t",32))
+                    _type = PointerClass(BaseType("uint8_t",8))
 
                     if not _type.referencedType.checkPromotion(reference.values):
                         raise Exception(f"Can't cast {reference} to {_type}!")
                     else:
-                        ctxt.annotateType(f"{input.name}_iv", PointerClass(BaseType("uint32_t",32)))
+                        ctxt.annotateType(f"{input.name}_iv", PointerClass(BaseType("uint8_t",8)))
         return ctxt
 
     def typeInferGlobalCtxt(self, ctxt: NetworkContext, node: gs.Node) -> NetworkContext:
@@ -2009,7 +2013,6 @@ class ONNXLayer():
             channels_first = default_channels_first
         else:
             channels_first = self.mapper.parser.operatorRepresentation['channels_first']
-
         newInputShapes, newOutputShapes = self.computeShapes(inputShapes, outputShapes,
                                                              self.mapper.parser.operatorRepresentation, channels_first)
 
@@ -2031,9 +2034,84 @@ class ONNXLayer():
                     # If the number of elements is equal, reshape
                     if np.prod(ctxt.globalObjects[node.name].values.shape) == np.prod(newShape):
                         ctxt.globalObjects[node.name].values.reshape(newShape)
+                        if(np.prod(newShape) % 16 != 0):
+                            print("IF branch 😎")
+                            print("Node name: ", node.name)
+                            print("ctxt.globalObjects[node.name].values: ", ctxt.globalObjects[node.name].values)
+                            print(ctxt.globalObjects[node.name].__dict__)
+
+                            bytes_encrypted = ctxt.globalObjects[node.name].values.tobytes()
+
+                            key = bytes.fromhex("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFABCD")
+                            nonce = bytes.fromhex("000000000000000000000000CACACACA")
+
+                            iv = ctxt.globalObjects[f"{node.name}_iv"]
+                            print(node.name)
+                            print(iv.values)
+
+                            nonce = iv.values.tobytes()
+
+                            cipher = Cipher(algorithms.AES(key), modes.CTR(nonce))
+                            decryptor = cipher.decryptor()
+
+                            bytes_plaintext = decryptor.update(bytes_encrypted) + decryptor.finalize()
+
+                            # 6. Riconversione dei byte decifrati in 4 interi a 32 bit
+                            array_plaintext = np.frombuffer(bytes_plaintext, dtype=np.int32)
+
+                            # --- Output di verifica ---
+                            print("Byte cifrati (hex):", bytes_encrypted.hex())
+                            print("Array decifrato:", array_plaintext)
+
+                            ctxt.globalObjects[node.name].values = np.trim_zeros(array_plaintext, 'b')
+                            print("Array trimmato: ", ctxt.globalObjects[node.name].values)
+
+                            ctxt.globalObjects[node.name].values = np.broadcast_to(ctxt.globalObjects[node.name].values,
+                                                                                    newShape)
+                            #qui anche i bias che sono un singolo valore vengono "propagati" (broadcast)
+                            #es. mul tensor di miniMobileNet, che nel ONNX è un singolo valore
+
+                            # Ora, qui c'è il plaintext in values con già fatto il broadcast 
+                            # [val, val, val, ...., val] "newShape" volte
+                            # ====> Va cifrato di nuovo con zero-padding a blocchi di 16 byte
+
+                            # 1. Recuperiamo l'array dopo il broadcast
+                            array_plaintext = ctxt.globalObjects[node.name].values
+
+                            # 2. Calcoliamo quanti elementi mancano per essere multipli di 16 byte (multipli di 4 elementi int32)
+                            # len(array_plaintext) % 4 ci dice quanti elementi "eccedono" l'ultimo blocco da 4
+                            elementi_mancanti = (4 - (len(array_plaintext) % 4)) % 4
+
+                            # 3. Se mancano elementi, applichiamo lo zero-padding alla fine dell'array
+                            if elementi_mancanti > 0:
+                                array_plaintext = np.pad(array_plaintext, (0, elementi_mancanti), 'constant', constant_values=0)
+
+                            # 4. Convertiamo l'array (ora allineato a 16 byte) in formato byte
+                            bytes_new_plaintext = array_plaintext.tobytes()
+
+                            # 5. Inizializziamo il cifrario (stessa chiave e stesso nonce)
+                            cipher_encrypt = Cipher(algorithms.AES(key), modes.CTR(nonce))
+                            encryptor = cipher_encrypt.encryptor()
+
+                            # 6. Cifriamo i byte (compreso lo zero-padding inserito)
+                            bytes_new_encrypted = encryptor.update(bytes_new_plaintext) + encryptor.finalize()
+
+                            # 7. Convertiamo i byte cifrati nuovamente in un array NumPy int32
+                            array_new_encrypted = np.frombuffer(bytes_new_encrypted, dtype=np.int32).copy()
+
+                            # 8. Sovrascriviamo l'oggetto globale con il nuovo array cifrato e con padding
+                            ctxt.globalObjects[node.name].values = array_new_encrypted
+
+                            # --- Output di verifica finale ---
+                            print(f"Dimensione finale array: {len(array_new_encrypted)} elementi ({len(bytes_new_encrypted)} byte)")
+                            print("Nuovo Array cifrato (primi elementi):", ctxt.globalObjects[node.name].values)
+                            ctxt.globalObjects[node.name].shape = len(array_new_encrypted)
+                            
+
                     # The number of elements SHOULD be lower, and we broadcast
                     #                        |-----> YES BUT, not guaranteed in this implementation (DeeployAstral)
                     elif np.prod(ctxt.globalObjects[node.name].values.shape) > np.prod(newShape):
+                            print("SONO NELL'ELIF")
                             print("Node name: ", node.name)
                             print(ctxt.globalObjects[node.name].__dict__)
                             print("newShape: ", newShape)
@@ -2050,8 +2128,14 @@ class ONNXLayer():
 
                             bytes_encrypted = ctxt.globalObjects[node.name].values.tobytes()
 
-                            key = bytes.fromhex("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF")
+                            key = bytes.fromhex("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFABCD")
                             nonce = bytes.fromhex("000000000000000000000000CACACACA")
+
+                            iv = ctxt.globalObjects[f"{node.name}_iv"]
+                            print(node.name)
+                            print(iv.values)
+
+                            nonce = iv.values.tobytes()
 
                             cipher = Cipher(algorithms.AES(key), modes.CTR(nonce))
                             decryptor = cipher.decryptor()
@@ -2840,6 +2924,24 @@ class NetworkContainer():
         log.debug(" - Parse and Type Check Network")
         start_time = time.perf_counter()
 
+        #Aggiunta chiavi di crittografia al NetworkContext, per ora IN CHIARO
+        
+        hmac_key_bytes = bytes.fromhex(self.graph.hmac_key)
+        aes_key_bytes = bytes.fromhex(self.graph.aes_key)
+
+        hmac_key_tensor = gs.Constant(
+            name = "hmac_key",
+            values = np.frombuffer(hmac_key_bytes,dtype = np.uint32)
+        )
+
+        aes_key_tensor = gs.Constant(
+            name = "aes_key",
+            values = np.frombuffer(aes_key_bytes,dtype = np.uint32)
+        )
+
+        ctxt.hoistConstant(hmac_key_tensor, _type = PointerClass(BaseType("uint32_t",32)))
+        ctxt.hoistConstant(aes_key_tensor,  _type = PointerClass(BaseType("uint32_t",32)))
+
         iteration_main = 0
         iteration_sub = 0
         iteration_tot = 0
@@ -2859,6 +2961,7 @@ class NetworkContainer():
 
             newCtxt, parseSuccess = self._parseNode(currentLayer, ctxt, default_channels_first)
 
+
             typeCheckSuccess = False
             if parseSuccess:
                 newCtxt, typeCheckSuccess = self._typeCheckNode(currentLayer, newCtxt)
@@ -2871,6 +2974,10 @@ class NetworkContainer():
                 if idx > deepestIdx:
                     deepestIdx = max(idx, deepestIdx)
                     deepestCtxt = stCtxt
+
+
+
+
 
             else:
                 # SCHEREMO: If we can't find a mapping for the root, we must exit
@@ -3240,8 +3347,27 @@ class NetworkContainer():
             for include in engine.includeList:
                 includeStr += ["#include \"" + include + "\""]
         return ("\n").join(includeStr)
+
+    def generateKeyUploadingCode(self) -> str:
+        """
+        Generates key upload code for PULPOpen
+
+        """
+
+        ret = "\n//AES and HMAC Key upload"
+                
+        ret += f"""
+                cl_task.src = DeeployNetwork_aes_key;
+                cl_task.dst = DeeployNetwork_hmac_key;
+                cl_task.size = 0;
+                mailbox_send(1,&cl_task, 16);
+                mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
+                wait_for_idma_transfer();
+                """
+
+        return ret
     
-    def generateSignatureVeriricationCode(self) -> str:
+    def generateSignatureVerificationCode(self) -> str:
         """Generate hmac verification code for PULPOpen
 
         Returns 
@@ -3276,7 +3402,7 @@ class NetworkContainer():
                         cl_task.src = DeeployNetwork_{a.buffer};
                         cl_task.dst = DeeployNetwork_{a.iv};
                         cl_task.size = 0;
-                        mailbox_send(1,&cl_task, 64);
+                        mailbox_send(1,&cl_task, 256);
                         mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
                         wait_for_idma_transfer();
                         """
@@ -3330,6 +3456,7 @@ class NetworkContainer():
         return totalSum
 
         # Don't override this
+
     def _exportGraph(self, folderPath, fileName):
         relativeDataPath = os.path.join(folderPath, fileName + _dataExtension)
         absoluteDataPath = os.path.abspath(relativeDataPath)
@@ -3344,6 +3471,7 @@ class NetworkContainer():
         for tensor in constTensors:
             if tensor.dtype != tensor.export_dtype:
                 tensor.values = tensor.values.astype(tensor.export_dtype)
+
 
         model = gs.export_onnx(self.graph)
 
@@ -3368,6 +3496,15 @@ class NetworkContainer():
                     tensor.doc_string += f"Type: {gObject._type.typeName}, "
                     if hasattr(gObject._type, "referencedType"):
                         tensor.doc_string += f"Reference Type: {gObject._type.referencedType.typeName}"
+
+        if getattr(self.graph, "aes_key", None) and getattr(self.graph, "hmac_key", None):
+            entry = model.metadata_props.add()
+            entry.key = "aes_key"
+            entry.value = str(self.graph.aes_key)
+
+            entry = model.metadata_props.add()
+            entry.key = "hmac_key"
+            entry.value = str(self.graph.hmac_key)
 
         convert_model_to_external_data(model, location = fileName + _dataExtension)
         onnx.save(model, absoluteOnnxPath)
@@ -3664,7 +3801,8 @@ class NetworkDeployer(NetworkContainer):
         self.graph = self.lower(self.graph)  # This lowers the graph to a deployable format
 
 
-        key = "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+        # key = "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+        key = "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFABCD"
         hmac_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         # nonce = "000000000000000000000000CACACACA"
 

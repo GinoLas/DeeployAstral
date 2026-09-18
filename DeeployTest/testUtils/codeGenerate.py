@@ -207,7 +207,8 @@ def generateTestNetworkImplementation(deployer: NetworkDeployer, verbosityCfg: C
 
         void InitNetwork(__attribute__((unused)) uint32_t core_id, __attribute__((unused)) uint32_t numThreads){
         """
-    retStr += deployer.generateSignatureVeriricationCode()
+    retStr += deployer.generateKeyUploadingCode()
+    retStr += deployer.generateSignatureVerificationCode()
     retStr += deployer.generateEngineInitializationCode()
     retStr += deployer.generateBufferAllocationCode()
     retStr += """
