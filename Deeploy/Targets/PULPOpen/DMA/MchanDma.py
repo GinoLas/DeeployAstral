@@ -46,21 +46,22 @@ class MchanDma(AsyncDma):
         1: NodeTemplate("""
                         //sha256 = ${sha256}
                         //bufferHash = ${bufferHash}
+                        //local_id = ${local_id}
+                        //external_id = ${external_id}
                         cl_task.transfer_id = 0x${sha256};
                         cl_task.size = ${size};
                         cl_task.src = ${loc};
                         cl_task.dst = ${ext};
-                        //Hashmap keys 
+                        while((mb_read(MBOX_CAR_INT_SND_STAT(1)) != 0));
                         mailbox_send(1,&cl_task,${ot_flags});
                         mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
-                        //partial_size_${sha256} += cl_task.size;
-                        //wait_for_idma_transfer();
-
                         """),
         2: NodeTemplate("""
                         //sha256 = ${sha256}
                         //bufferHash = ${bufferHash}
                         //${size_1d}
+                        //local_id = ${local_id}
+                        //external_id = ${external_id}
                         //cl_task.bufferHash = 0x${bufferHash};
                         cl_task.transfer_id = 0x${sha256};
                         cl_task.size = ${size};
@@ -72,7 +73,6 @@ class MchanDma(AsyncDma):
                         cl_task.size_1d = ${size_1d};
                         mailbox_send(1,&cl_task,${ot_flags});
                         mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
-                        //wait_for_idma_transfer();
                         """),
     }
     _waitingStrategy = DirectionWaitingStrategy(MchanChannelFuture, "channel")
@@ -193,6 +193,12 @@ class MchanDma(AsyncDma):
             # print(operatorRepresentation["sha256"]+ "-->" + " NOT input/output")
         # else:
             # print(operatorRepresentation["sha256"]+ "-->" + " input/output")
+
+
+        operatorRepresentation["external_id"] = ctxt.lookup(externalBuffer._referenceName).id
+        operatorRepresentation["local_id"] = ctxt.lookup(localBuffer._referenceName).id
+
+
 
         
 

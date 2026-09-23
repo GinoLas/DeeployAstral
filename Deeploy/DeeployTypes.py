@@ -542,6 +542,8 @@ class NetworkContext():
     the respective buffers. It holds all hoisted transient buffers, struct buffers, and global definitions.
     The context is the source of truth for all code generation in the backend.
     """
+    #ancora
+    tensor_id = 0
 
     def __init__(self,
                  variableBuffer: Type[VariableBuffer],
@@ -742,6 +744,9 @@ class NetworkContext():
         """
         if _id != "":
             obj.name = self._mangle(_id + "_" + obj.name, False)
+
+        obj.id = self.tensor_id 
+        self.tensor_id = self.tensor_id+1
 
         if ctxt == 'local':
             if obj.name not in self.localObjects.keys():
@@ -1008,6 +1013,8 @@ class NetworkContext():
 
         # LMACAN: The shape needs to be copied into a tuple for pickling to work. Don't ask me why..
         buffer = self.ConstantBuffer(name, tuple(constant.shape), constant.values)
+        buffer.id = self.tensor_id
+        self.tensor_id = self.tensor_id+1
         self.add(buffer, 'global')
 
         if _type is not None:
