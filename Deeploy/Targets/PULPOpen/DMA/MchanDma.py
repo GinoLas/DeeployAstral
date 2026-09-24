@@ -6,7 +6,7 @@ import hashlib
 import math
 from typing import Dict, Tuple
 
-from Deeploy.DeeployTypes import NetworkContext, NodeTemplate, OperatorRepresentation, VariableBuffer, TransientBuffer, ConstantBuffer
+from Deeploy.DeeployTypes import NetworkContext, NodeTemplate, OperatorRepresentation, VariableBuffer, TransientBuffer, ConstantBuffer, _ReferenceBuffer
 from Deeploy.TilingExtension.AsyncDma import AsyncDma, DirectionWaitingStrategy, DmaDirection, Future
 
 counter = 0
@@ -16,14 +16,24 @@ hash_counter = {}
 
 class MchanChannelFuture(Future):
 
-    _initTemplate = NodeTemplate("")
+    _initTemplate = NodeTemplate("""
+#if defined(DEEPLOY_OT_ASYNC_ABI)
+    uint32_t ${name}_submitted = 0;
+    volatile uint32_t ${name}_completed = 0;
+#endif
+""")
 
     _deinitTemplate = NodeTemplate("")
 
     _allocTemplate = NodeTemplate("")
 
     _waitTemplate = NodeTemplate("""
+#if defined(DEEPLOY_OT_ASYNC_ABI)
+    while (${name}_completed != ${name}_submitted) { }
+    __asm__ volatile ("fence iorw, iorw" ::: "memory");
+#else
     wait_for_idma_transfer();
+#endif
 """)
     
 
@@ -48,13 +58,29 @@ class MchanDma(AsyncDma):
                         //bufferHash = ${bufferHash}
                         //local_id = ${local_id}
                         //external_id = ${external_id}
+#if defined(DEEPLOY_OT_ASYNC_ABI)
+                        while (mb_read(MBOX_CAR_INT_SND_STAT(1)) != 0) { }
+                        __asm__ volatile ("fence iorw, iorw" ::: "memory");
+#endif
                         cl_task.transfer_id = 0x${sha256};
                         cl_task.size = ${size};
                         cl_task.src = ${loc};
                         cl_task.dst = ${ext};
                         while((mb_read(MBOX_CAR_INT_SND_STAT(1)) != 0));
+#if defined(DEEPLOY_OT_ASYNC_ABI)
+                        cl_task.src_key = (uint32_t)(uintptr_t)${external_base};
+                        cl_task.dst_key = (uint32_t)(uintptr_t)${external_base};
+                        cl_task.completion_addr = (uint32_t)(uintptr_t)&${future}_completed;
+                        cl_task.completion_value = ++${future}_submitted;
+                        __asm__ volatile ("fence iorw, iorw" ::: "memory");
+#endif
                         mailbox_send(1,&cl_task,${ot_flags});
                         mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
+#if defined(DEEPLOY_OT_ASYNC_ABI)
+                        __asm__ volatile ("fence iorw, iorw" ::: "memory");
+                        while (mb_read(MBOX_CAR_INT_SND_STAT(1)) != 0) { }
+                        __asm__ volatile ("fence iorw, iorw" ::: "memory");
+#endif
                         """),
         2: NodeTemplate("""
                         //sha256 = ${sha256}
@@ -63,6 +89,10 @@ class MchanDma(AsyncDma):
                         //local_id = ${local_id}
                         //external_id = ${external_id}
                         //cl_task.bufferHash = 0x${bufferHash};
+#if defined(DEEPLOY_OT_ASYNC_ABI)
+                        while (mb_read(MBOX_CAR_INT_SND_STAT(1)) != 0) { }
+                        __asm__ volatile ("fence iorw, iorw" ::: "memory");
+#endif
                         cl_task.transfer_id = 0x${sha256};
                         cl_task.size = ${size};
                         cl_task.src = ${loc};
@@ -71,8 +101,20 @@ class MchanDma(AsyncDma):
                         cl_task.dst_stride = ${stride_dst};
                         cl_task.repetitions = ${repetitions};
                         cl_task.size_1d = ${size_1d};
+#if defined(DEEPLOY_OT_ASYNC_ABI)
+                        cl_task.src_key = (uint32_t)(uintptr_t)${external_base};
+                        cl_task.dst_key = (uint32_t)(uintptr_t)${external_base};
+                        cl_task.completion_addr = (uint32_t)(uintptr_t)&${future}_completed;
+                        cl_task.completion_value = ++${future}_submitted;
+                        __asm__ volatile ("fence iorw, iorw" ::: "memory");
+#endif
                         mailbox_send(1,&cl_task,${ot_flags});
                         mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
+#if defined(DEEPLOY_OT_ASYNC_ABI)
+                        __asm__ volatile ("fence iorw, iorw" ::: "memory");
+                        while (mb_read(MBOX_CAR_INT_SND_STAT(1)) != 0) { }
+                        __asm__ volatile ("fence iorw, iorw" ::: "memory");
+#endif
                         """),
     }
     _waitingStrategy = DirectionWaitingStrategy(MchanChannelFuture, "channel")
@@ -100,8 +142,17 @@ class MchanDma(AsyncDma):
         operatorRepresentation = super().transferOpRepr(externalBuffer, localBuffer, shape, strideExt, strideLoc,
                                                         direction, future)
 
-        is_input = ctxt.lookup(externalBuffer._referenceName).is_input or ctxt.lookup(localBuffer._referenceName).is_input
-        is_output = ctxt.lookup(externalBuffer._referenceName).is_output or ctxt.lookup(localBuffer._referenceName).is_output
+        # Ping/pong and the any-dimensional adapter introduce multiple reference levels.
+        def rootBuffer(buffer):
+            while isinstance(buffer, _ReferenceBuffer):
+                buffer = ctxt.lookup(buffer._referenceName)
+            return buffer
+
+        externalRoot = rootBuffer(externalBuffer)
+        localRoot = rootBuffer(localBuffer)
+        operatorRepresentation["external_base"] = externalRoot.name
+        is_input = externalRoot.is_input or localRoot.is_input
+        is_output = externalRoot.is_output or localRoot.is_output
 
         transferRank = len(shape)
 
@@ -179,7 +230,7 @@ class MchanDma(AsyncDma):
 
 
         # if("weight" in externalBuffer.name or "weight" in localBuffer.name):
-        if(isinstance(ctxt.lookup(externalBuffer._referenceName),ConstantBuffer)):
+        if(isinstance(externalRoot,ConstantBuffer)):
             OTflags += (1 << 1)
 
         old_size = mchanTransferSize
@@ -195,8 +246,8 @@ class MchanDma(AsyncDma):
             # print(operatorRepresentation["sha256"]+ "-->" + " input/output")
 
 
-        operatorRepresentation["external_id"] = ctxt.lookup(externalBuffer._referenceName).id
-        operatorRepresentation["local_id"] = ctxt.lookup(localBuffer._referenceName).id
+        operatorRepresentation["external_id"] = externalRoot.id
+        operatorRepresentation["local_id"] = localRoot.id
 
 
 

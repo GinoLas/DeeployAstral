@@ -1,0 +1,1343 @@
+// Copyright lowRISC contributors.
+// Licensed under the Apache License, Version 2.0, see LICENSE for details.
+// SPDX-License-Identifier: Apache-2.0
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
+
+#include "hw/top_earlgrey/sw/autogen/top_earlgrey.h"
+
+#include "sw/device/lib/testing/test_framework/ottf_main.h"
+#include "sw/device/lib/testing/test_framework/check.h"
+#include "sw/device/lib/dif/dif_uart.h"
+
+#include "sw/device/lib/dif/dif_hmac.h"
+#include "sw/device/lib/testing/hmac_testutils.h"
+
+
+#include "sw/device/silicon_creator/rom/uart.h"
+#include "sw/device/silicon_creator/rom/string_lib.h"
+#include "sw/device/lib/runtime/ibex.h"
+#include "sw/device/lib/base/abs_mmio.h"
+
+//import from AES test
+#include "sw/device/lib/arch/device.h"
+#include "sw/device/lib/base/mmio.h"
+#include "sw/device/lib/base/bitfield.h"
+#include "sw/device/lib/base/memory.h"
+
+
+
+//generated with regtool.py
+#include "aes_regs.h"
+
+
+#include "mbox.h"
+
+#include "idma.h"
+#include "cluster.h"
+#include "utils.h"
+#include "hashmap.h"
+
+#include "edn_regs.h"
+#include "csrng_regs.h"  // Generated
+#include "entropy_src_regs.h"  // Generated.
+#define TITANSSL_IBL1_BASE 0xe0004000
+#define TITANSSL_TEST_WORDSIZES  18
+
+typedef struct {
+    uint8_t *data;
+} titanssl_batch_t;
+
+static memory_transfer_operation_altered_t cluster_task;
+
+static titanssl_batch_t key;
+
+#define ENTROPY_CMD(m, i) ((bitfield_field32_t){.mask = m, .index = i})
+
+void initialize_memory() {
+
+  key.data = (uint8_t*) TITANSSL_IBL1_BASE;
+  for(size_t i=0; i<TITANSSL_TEST_WORDSIZES*4; i++)
+    key.data[i] = 0x00;
+}
+
+void print_results(uint32_t words) {
+
+  for(size_t i=0; i<words; i++)
+    printf("DATA %d: 0x%x\r\n", i, ((uint32_t*)key.data)[i]);
+}
+
+
+//#include "qyolo_pulp_cluster_runtime_payload.h"
+
+//comment this to disable cycle counters OT side
+//#define OT_BENCHMARK
+
+#define N_BYTES 4096
+#define N_WORDS (N_BYTES/4)
+
+
+static buffering_2d_t buffer2d;
+enum operation_enum {ENCRYPTION,DECRYPTION};
+enum offset_enum {SRC_BASED,DST_BASED};
+void issue_secure_1d_transfer(uint32_t src, uint32_t src_key, uint32_t dst, uint32_t dst_key, uint32_t size,enum operation_enum operation,enum offset_enum offset_base);
+void issue_idma_2d_secure_emulated_ext_strided_dec(uint32_t src, uint32_t src_key, uint32_t dst, uint32_t dst_key, uint32_t len, uint32_t d_stride, uint32_t reps);
+void pulp_cluster_kick_off(void* boot_addr);
+
+//### AES CTR ###
+
+static  uint32_t AesKey[8] = {
+    0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0
+};
+
+static  uint32_t AesIv[4] = {
+    0x00000000, 0x00000000,
+    0x00000000, 0x00000000
+};
+
+//AES utils
+
+uint32_t _aes_get_keyreg(uint32_t idx){
+    uint32_t reg_offset[8*2] = {
+        AES_KEY_SHARE0_0_REG_OFFSET,
+        AES_KEY_SHARE0_1_REG_OFFSET,
+        AES_KEY_SHARE0_2_REG_OFFSET,
+        AES_KEY_SHARE0_3_REG_OFFSET,
+        AES_KEY_SHARE0_4_REG_OFFSET,
+        AES_KEY_SHARE0_5_REG_OFFSET,
+        AES_KEY_SHARE0_6_REG_OFFSET,
+        AES_KEY_SHARE0_7_REG_OFFSET,
+        AES_KEY_SHARE1_0_REG_OFFSET,
+        AES_KEY_SHARE1_1_REG_OFFSET,
+        AES_KEY_SHARE1_2_REG_OFFSET,
+        AES_KEY_SHARE1_3_REG_OFFSET,
+        AES_KEY_SHARE1_4_REG_OFFSET,
+        AES_KEY_SHARE1_5_REG_OFFSET,
+        AES_KEY_SHARE1_6_REG_OFFSET,
+        AES_KEY_SHARE1_7_REG_OFFSET
+    };
+    return reg_offset[idx];
+}
+
+uint32_t _aes_get_ivreg(uint32_t idx){
+    uint32_t reg_offset[4] = {
+        AES_IV_0_REG_OFFSET,
+        AES_IV_1_REG_OFFSET,
+        AES_IV_2_REG_OFFSET,
+        AES_IV_3_REG_OFFSET
+    };
+    return reg_offset[idx];
+}
+
+uint32_t _aes_get_datainreg(uint32_t idx){
+    uint32_t reg_offset[4] = {
+        AES_DATA_IN_0_REG_OFFSET,
+        AES_DATA_IN_1_REG_OFFSET,
+        AES_DATA_IN_2_REG_OFFSET,
+        AES_DATA_IN_3_REG_OFFSET
+    };
+    return reg_offset[idx];
+}
+
+
+
+
+void aes_init(uint32_t* aes_iv, uint32_t *aes_key) {
+
+  mmio_region_t aes;
+  uint32_t reg;
+
+  uint32_t* tcdm = (uint32_t*) TCDM_BASE;
+
+  //printf_init();
+  utils_entropy_init();
+
+  int next = 0;
+
+  //printf("[OpenTitan🐯] AES Setup START\r\n");
+
+  aes = mmio_region_from_addr(TOP_EARLGREY_AES_BASE_ADDR);
+
+  // Reset the IP
+  while(!mmio_region_get_bit32(aes, AES_STATUS_REG_OFFSET, AES_STATUS_IDLE_BIT)); //ATTENDE CHE L'ACCELERATORE AES SIA IDLE
+  reg = bitfield_bit32_write(0, \
+    AES_CTRL_SHADOWED_MANUAL_OPERATION_BIT, true);
+  mmio_region_write32(aes, \
+    AES_CTRL_SHADOWED_REG_OFFSET, reg);
+  mmio_region_write32(aes, \
+    AES_CTRL_SHADOWED_REG_OFFSET, reg);
+  reg = bitfield_bit32_write(0, \
+    AES_TRIGGER_KEY_IV_DATA_IN_CLEAR_BIT, true);
+  reg = bitfield_bit32_write(reg, \
+    AES_TRIGGER_DATA_OUT_CLEAR_BIT, true);
+  mmio_region_write32(aes, \
+    AES_TRIGGER_REG_OFFSET, reg);
+  while (!mmio_region_get_bit32(aes, \
+    AES_STATUS_REG_OFFSET, AES_STATUS_IDLE_BIT));
+  reg = bitfield_field32_write(0, \
+    AES_CTRL_SHADOWED_OPERATION_FIELD, \
+    AES_CTRL_SHADOWED_OPERATION_MASK);
+  reg = bitfield_field32_write(reg, \
+    AES_CTRL_SHADOWED_MODE_FIELD, \
+    AES_CTRL_SHADOWED_MODE_VALUE_AES_NONE);
+  reg = bitfield_field32_write(reg, \
+    AES_CTRL_SHADOWED_KEY_LEN_FIELD, \
+    AES_CTRL_SHADOWED_KEY_LEN_MASK);
+  mmio_region_write32(aes, \
+    AES_CTRL_SHADOWED_REG_OFFSET, reg);
+  mmio_region_write32(aes, \
+    AES_CTRL_SHADOWED_REG_OFFSET, reg);
+
+    // Initialize AES IP configurations
+  while(!mmio_region_get_bit32(aes, AES_STATUS_REG_OFFSET, AES_STATUS_IDLE_BIT));
+  reg = bitfield_field32_write(0, \
+      AES_CTRL_SHADOWED_OPERATION_FIELD, \
+      AES_CTRL_SHADOWED_OPERATION_VALUE_AES_ENC);
+  reg = bitfield_field32_write(reg, \
+    AES_CTRL_SHADOWED_MODE_FIELD, \
+    AES_CTRL_SHADOWED_MODE_VALUE_AES_CTR); //CBC al posto di CTR
+  reg = bitfield_field32_write(reg, \
+    AES_CTRL_SHADOWED_KEY_LEN_FIELD, \
+    AES_CTRL_SHADOWED_KEY_LEN_VALUE_AES_256);
+  reg = bitfield_field32_write(reg, \
+    AES_CTRL_SHADOWED_PRNG_RESEED_RATE_FIELD, \
+    AES_CTRL_SHADOWED_PRNG_RESEED_RATE_VALUE_PER_64);
+  reg = bitfield_bit32_write(reg, \
+    AES_CTRL_SHADOWED_MANUAL_OPERATION_BIT, false);
+  reg = bitfield_bit32_write(reg, \
+    AES_CTRL_SHADOWED_SIDELOAD_BIT, false);
+  mmio_region_write32(aes, \
+    AES_CTRL_SHADOWED_REG_OFFSET, reg);
+  mmio_region_write32(aes, \
+    AES_CTRL_SHADOWED_REG_OFFSET, reg);
+
+  // Initialize AES IP auxiliary configurations
+  reg = bitfield_bit32_write(0, \
+    AES_CTRL_AUX_SHADOWED_KEY_TOUCH_FORCES_RESEED_BIT, false);
+  reg = bitfield_bit32_write(reg, \
+    AES_CTRL_AUX_SHADOWED_FORCE_MASKS_BIT, false);
+  mmio_region_write32(aes, \
+    AES_CTRL_AUX_SHADOWED_REG_OFFSET, reg);
+  mmio_region_write32(aes, \
+    AES_CTRL_AUX_SHADOWED_REG_OFFSET, reg);
+  mmio_region_write32(aes, \
+    AES_CTRL_AUX_REGWEN_REG_OFFSET, true);
+
+
+  // Initialize key shares correctly
+  for (size_t i = 0; i < 8; i++) {
+    mmio_region_write32(aes,
+        _aes_get_keyreg(i),
+        aes_key[i]);          // SHARE0 = FF
+    mmio_region_write32(aes,
+        _aes_get_keyreg(i + 8),
+        0x00000000);         // SHARE1 = 0
+  }
+
+  reg = mmio_region_read32(aes, \
+    AES_CTRL_SHADOWED_REG_OFFSET);
+  reg = bitfield_field32_read(reg, AES_CTRL_SHADOWED_MODE_FIELD);
+  if (reg != AES_CTRL_SHADOWED_MODE_VALUE_AES_ECB) {
+      while(!mmio_region_get_bit32(aes, \
+        AES_STATUS_REG_OFFSET, AES_STATUS_IDLE_BIT));
+      for (size_t i=0; i<4; i++) {
+          mmio_region_write32(aes, \
+            _aes_get_ivreg(i), \
+            aes_iv[i]);         //IV Parametro della funzione
+      }
+  }
+
+
+}
+
+uint32_t  AesTestIv[4] = {
+          0x00000000, 0x00000000,
+          0x00000000, 0xCACACACA
+        };
+
+uint32_t  AesTestKey[8] = {
+  0x00000000, 0x00000000,
+  0x00000000, 0xCACACACA,
+  0x00000000, 0x00000000,
+  0x00000000, 0xCACACACA,
+};
+
+void utils_csrng_randgen(titanssl_batch_t *dat, uint32_t words) {
+
+  mmio_region_t entropy_src, csrng, edn0, edn1;
+  uint32_t reg, len;
+  bool ready;
+
+  static const bitfield_field32_t kAppCmdFieldFlag0 = ENTROPY_CMD(0xf, 8);
+  static const bitfield_field32_t kAppCmdFieldCmdId = ENTROPY_CMD(0xf, 0);
+  static const bitfield_field32_t kAppCmdFieldCmdLen = ENTROPY_CMD(0xf, 4);
+  static const bitfield_field32_t kAppCmdFieldGlen = ENTROPY_CMD(0x7ffff, 12);
+
+  entropy_src = mmio_region_from_addr(TOP_EARLGREY_ENTROPY_SRC_BASE_ADDR);
+  csrng = mmio_region_from_addr(TOP_EARLGREY_CSRNG_BASE_ADDR);
+  edn0 = mmio_region_from_addr(TOP_EARLGREY_EDN0_BASE_ADDR);
+  edn1 = mmio_region_from_addr(TOP_EARLGREY_EDN1_BASE_ADDR);
+
+    // reset edn0
+  reg = mmio_region_read32(edn0, EDN_CTRL_REG_OFFSET);
+  reg = bitfield_field32_write(reg, EDN_CTRL_CMD_FIFO_RST_FIELD,
+                               kMultiBitBool4True);
+  mmio_region_write32(edn0, EDN_CTRL_REG_OFFSET, reg);
+  mmio_region_write32(edn0, EDN_CTRL_REG_OFFSET, EDN_CTRL_REG_RESVAL);
+
+    // reset edn1
+  reg = mmio_region_read32(edn1, EDN_CTRL_REG_OFFSET);
+  reg = bitfield_field32_write(reg, EDN_CTRL_CMD_FIFO_RST_FIELD,
+                               kMultiBitBool4True);
+  mmio_region_write32(edn1, EDN_CTRL_REG_OFFSET, reg);
+  mmio_region_write32(edn1, EDN_CTRL_REG_OFFSET, EDN_CTRL_REG_RESVAL);
+
+    // reset csrng
+  mmio_region_write32(csrng, CSRNG_CTRL_REG_OFFSET, CSRNG_CTRL_REG_RESVAL);
+
+    // reset entropy
+  mmio_region_write32(entropy_src,
+                      ENTROPY_SRC_MODULE_ENABLE_REG_OFFSET,
+                      ENTROPY_SRC_MODULE_ENABLE_REG_RESVAL);
+  mmio_region_write32(entropy_src,
+                      ENTROPY_SRC_ENTROPY_CONTROL_REG_OFFSET,
+                      ENTROPY_SRC_ENTROPY_CONTROL_REG_RESVAL);
+
+  mmio_region_write32(entropy_src, ENTROPY_SRC_CONF_REG_OFFSET,
+                      ENTROPY_SRC_CONF_REG_RESVAL);
+
+  mmio_region_write32(entropy_src,
+                      ENTROPY_SRC_HEALTH_TEST_WINDOWS_REG_OFFSET,
+                      ENTROPY_SRC_HEALTH_TEST_WINDOWS_REG_RESVAL);
+
+  mmio_region_write32(entropy_src,
+                      ENTROPY_SRC_ALERT_THRESHOLD_REG_OFFSET,
+                      ENTROPY_SRC_ALERT_THRESHOLD_REG_RESVAL);
+
+    // entropy configure
+  reg = bitfield_field32_write(
+      0, ENTROPY_SRC_ENTROPY_CONTROL_ES_ROUTE_FIELD,
+      kMultiBitBool4False);
+  reg = bitfield_field32_write(
+      reg, ENTROPY_SRC_ENTROPY_CONTROL_ES_TYPE_FIELD,
+      kMultiBitBool4False);
+  mmio_region_write32(entropy_src,
+                      ENTROPY_SRC_ENTROPY_CONTROL_REG_OFFSET, reg);
+  reg = bitfield_field32_write(
+      0, ENTROPY_SRC_CONF_FIPS_ENABLE_FIELD,
+      kMultiBitBool4True);
+  reg = bitfield_field32_write(
+      reg, ENTROPY_SRC_CONF_ENTROPY_DATA_REG_ENABLE_FIELD,
+      kMultiBitBool4False);
+  reg = bitfield_field32_write(
+      reg, ENTROPY_SRC_CONF_THRESHOLD_SCOPE_FIELD,
+      kMultiBitBool4True);
+  reg = bitfield_field32_write(
+      reg, ENTROPY_SRC_CONF_RNG_BIT_ENABLE_FIELD, kMultiBitBool4False);
+  reg = bitfield_field32_write(
+      reg, ENTROPY_SRC_CONF_RNG_BIT_SEL_FIELD, 4);
+  reg = bitfield_field32_write(
+      reg, ENTROPY_SRC_CONF_ENTROPY_DATA_REG_ENABLE_FIELD,
+      kMultiBitBool4False);
+  mmio_region_write32(entropy_src, ENTROPY_SRC_CONF_REG_OFFSET,
+                      reg);
+  reg = bitfield_field32_write(ENTROPY_SRC_HEALTH_TEST_WINDOWS_REG_RESVAL,
+                             ENTROPY_SRC_HEALTH_TEST_WINDOWS_FIPS_WINDOW_FIELD,
+                             0x0200);
+  mmio_region_write32(entropy_src,
+                      ENTROPY_SRC_HEALTH_TEST_WINDOWS_REG_OFFSET,
+                      reg);
+
+  reg = bitfield_field32_write(
+      0, ENTROPY_SRC_ALERT_THRESHOLD_ALERT_THRESHOLD_FIELD,
+      2);
+  reg = bitfield_field32_write(
+      2, ENTROPY_SRC_ALERT_THRESHOLD_ALERT_THRESHOLD_INV_FIELD,
+      0xFFFD);
+  mmio_region_write32(entropy_src,
+                      ENTROPY_SRC_ALERT_THRESHOLD_REG_OFFSET, reg);
+  mmio_region_write32(entropy_src,
+                      ENTROPY_SRC_MODULE_ENABLE_REG_OFFSET,
+                      kMultiBitBool4True);
+
+    // configure csrng
+  reg =
+      bitfield_field32_write(0, CSRNG_CTRL_ENABLE_FIELD, kMultiBitBool4True);
+  reg = bitfield_field32_write(reg, CSRNG_CTRL_SW_APP_ENABLE_FIELD,
+                               kMultiBitBool4True);
+  reg = bitfield_field32_write(reg, CSRNG_CTRL_READ_INT_STATE_FIELD,
+                               kMultiBitBool4True);
+  mmio_region_write32(csrng, CSRNG_CTRL_REG_OFFSET, reg);
+
+  // entropy reseed
+  ready = false;
+  do {
+    reg = abs_mmio_read32(TOP_EARLGREY_CSRNG_BASE_ADDR + CSRNG_SW_CMD_STS_REG_OFFSET);
+    ready = bitfield_bit32_read(reg, CSRNG_SW_CMD_STS_CMD_RDY_BIT);
+  } while (!ready);
+
+  reg = bitfield_field32_write(0, kAppCmdFieldCmdId, 2);
+  reg = bitfield_field32_write(reg, kAppCmdFieldCmdLen, 0);
+  reg = bitfield_field32_write(reg, kAppCmdFieldGlen, 0);
+
+  abs_mmio_write32(TOP_EARLGREY_CSRNG_BASE_ADDR + CSRNG_CMD_REQ_REG_OFFSET, reg);
+  
+  // csrng generate
+  ready = false;
+  do {
+    reg = mmio_region_read32(csrng, CSRNG_SW_CMD_STS_REG_OFFSET);
+    ready = bitfield_bit32_read(reg, CSRNG_SW_CMD_STS_CMD_RDY_BIT);
+  } while (!ready);
+
+  len = (words + 3) / 4;
+
+  reg = bitfield_field32_write(0, kAppCmdFieldCmdId, 3);
+  reg = bitfield_field32_write(reg, kAppCmdFieldCmdLen, 0);
+  reg = bitfield_field32_write(
+      reg, kAppCmdFieldFlag0, kMultiBitBool4False); // kMultiBitBool4True or kMultiBitBool4False ?
+  reg = bitfield_field32_write(reg, kAppCmdFieldGlen, len);
+
+  mmio_region_write32(csrng, CSRNG_CMD_REQ_REG_OFFSET, reg);
+
+  do {
+    reg = mmio_region_read32(csrng, CSRNG_GENBITS_VLD_REG_OFFSET);
+    ready = bitfield_bit32_read(reg, CSRNG_GENBITS_VLD_GENBITS_VLD_BIT);
+  } while (!ready);
+
+  for (size_t i = 0; i < words; ++i) {
+    if (i % 4 == 0) {
+      do {
+        reg = mmio_region_read32(csrng, CSRNG_GENBITS_VLD_REG_OFFSET);
+        ready = bitfield_bit32_read(reg, CSRNG_GENBITS_VLD_GENBITS_VLD_BIT);
+      } while (!ready);
+    }
+    ((uint32_t*)dat->data)[i] = mmio_region_read32(csrng, CSRNG_GENBITS_REG_OFFSET);
+  }
+
+}
+
+
+
+int main(int argc, char **argv) {
+
+  buffer2d.transfer_id = 0;
+
+  //WARNING: rom/silicon_creator/uart.h has been modified to support astral architecture
+
+  astral_uart_init(50000000, 115200);
+
+  hashmap_init();
+
+
+  //uint32_t start_cycles = ibex_mcycle_read();
+  //printf("[OT] Cycles: %d\r\n", end_cycles-start_cycles);
+
+  //-----------PLIC------------------------- =>>>>> TODO: fare subroutine
+  printf("OpenTitan🐯: PLIC set UP...\r\n");
+
+  int volatile * plic_prio, * plic_en;
+  int volatile * p_reg;
+  uint32_t volatile a = 0;
+  uint32_t volatile b = 0;
+  
+ 
+  unsigned val = 0xe0000001;        
+  asm volatile("csrw mtvec, %0\n" : : "r"(val)); // move irq vector to SRAM base address
+   
+  unsigned val_1 = 0x00001808;      // Set global interrupt enable in ibex regs
+  unsigned val_2 = 0x00000800;      // Set external interrupts
+
+  asm volatile("csrw  mstatus, %0\n" : : "r"(val_1)); 
+  asm volatile("csrw  mie, %0\n"     : : "r"(val_2));
+
+  plic_prio  = (int *) 0xC800027C;  // Priority reg
+  plic_en    = (int *) 0xC8002010;  // Enable reg
+
+  *plic_prio  = 1;                   // Set mbox interrupt priority to 1
+  *plic_en    = 0x80000000;          // Enable interrupt
+  //-----------PLIC-------------------------
+
+  //TODO: CSRNG_test
+  printf("MEMORY INIT\r\n");    
+  initialize_memory();
+  printf("TEST START\r\n");
+  utils_csrng_randgen(&key, TITANSSL_TEST_WORDSIZES);
+  printf("RESULTS\r\n");
+  print_results(TITANSSL_TEST_WORDSIZES);
+  printf("DONE\r\n");
+
+
+  while(1){
+      // printf("OpenTitan🐯: Going wfi...\r\n");
+      asm volatile("fence rw,rw" ::: "memory");
+      asm volatile("wfi" ::: "memory");
+      asm volatile("fence rw,rw" ::: "memory");
+  }
+
+
+  return 0; 
+}
+
+static volatile int8_t *pointer = 0;
+
+static uint32_t kHmacKey[8] = {
+    0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0,
+};
+
+static const dif_hmac_transaction_t kHmacTransactionConfig = {
+    .digest_endianness = kDifHmacEndiannessLittle,
+    .message_endianness = kDifHmacEndiannessLittle,
+    // .digest_endianness = kDifHmacEndiannessBig,
+    // .message_endianness = kDifHmacEndiannessBig,
+};
+
+/**
+ * Initialize the HMAC engine. Return `true` if the configuration is valid.
+ */
+static void test_setup(mmio_region_t base_addr, dif_hmac_t *hmac) {
+  CHECK_DIF_OK(dif_hmac_init(base_addr, hmac));
+}
+
+/**
+ * Start HMAC in the correct mode. If `key` == NULL use SHA256 mode, otherwise
+ * use the provided key in HMAC mode.
+ */
+static void test_start(const dif_hmac_t *hmac, const uint8_t *key) {
+  // Let a null key indicate we are operating in SHA256-only mode.
+  if (key == NULL) {
+    CHECK_DIF_OK(dif_hmac_mode_sha256_start(hmac, kHmacTransactionConfig));
+  } else {
+    CHECK_DIF_OK(dif_hmac_mode_hmac_start(hmac, key, kHmacTransactionConfig));
+  }
+}
+
+/**
+ * Kick off the HMAC (or SHA256) run.
+ */
+static void run_hmac(const dif_hmac_t *hmac) {
+  CHECK_DIF_OK(dif_hmac_process(hmac));
+}
+
+static int run_test(const dif_hmac_t *hmac, const char *data, size_t len,
+                     const uint8_t *key,
+                     uint32_t *expected_digest) {
+
+  dif_hmac_digest_t digest;
+
+  test_start(hmac, key);
+  hmac_testutils_push_message(hmac, data, len);
+  hmac_testutils_fifo_empty_polled(hmac);
+  hmac_testutils_check_message_length(hmac, len * 8);
+  run_hmac(hmac);
+  
+  //attende il risultato e lo salva in digest.digest
+  hmac_testutils_finish_polled(hmac, &digest);
+  int j = 0;
+  for(int i = 7; i >= 0; i--){
+    //printf("digest[%d] = %x\r\n", i, swap_endianness((uint32_t) digest.digest[i]));
+    if(swap_endianness((uint32_t) digest.digest[i]) != expected_digest[j++]){
+      return -1;
+    }
+  }
+
+  return 1;
+
+}
+
+void external_irq_handler(void) {
+
+  #ifdef OT_BENCHMARK
+  uint32_t start_handler_cycles = ibex_mcycle_read();
+  #endif
+  uint32_t volatile * tcdm = (uint32_t *) TCDM_BASE;
+  uint32_t iid = *PLIC_CLAIM_COMPLETE;
+
+  if (iid == 0) {
+    return;
+  }
+
+  if(iid == 159){
+
+      //TODO : cambiare puntatore con struct (leggere una sola volta all'inizio)
+      memory_transfer_operation_altered_t * cl_task;
+      int next;
+    
+      mb_write(0x1, MBOX_CAR_INT_RCV_CLR(1));  
+      mb_write(0x1, MBOX_CAR_INT_SND_CLR(1));
+
+      uint32_t letter0 = 0x0;   //struct addr
+      uint32_t letter1 = 0x0;   //type transfer
+
+      mailbox_read(1, &letter0, &letter1);
+
+      // printf("Letter1 = 0x%x, Letter0 = 0x%x",letter1,letter0);
+
+      memory_transfer_operation_altered_t * prova = (memory_transfer_operation_altered_t *)letter0;
+
+      // printf("transfer id = 0x%x, src = %x, dst = %x",prova->transfer_id,prova->src,prova->dst);
+
+      // dump_memory_transfer((memory_transfer_operation_altered_t *)letter0, letter1);
+
+      cl_task = (memory_transfer_operation_altered_t *)letter0;
+
+      // printf("HO printato il tranfer, l'id sarebbe 0x%x\r\n",cl_task->transfer_id);
+
+
+      //Disattiva ogni tipo ti sicurezza, debug purposes
+      // letter1 &= ~SECURE_MASK;
+
+      if(letter1 & HOST_MASK){
+
+        // printf("[OT] Received request from CVA6: Starting cluster...\r\n");
+        // printf("[OT] BOOT ADDR : %x\r\n", letter0);
+        
+
+        asm volatile("":::"memory");
+        *(volatile uint32_t*)(0x7800FF00) = 0xFFFFFFF0;
+        asm volatile("":::"memory");;
+        
+        pulp_cluster_kick_off((void *) letter0); //ELF_BOOT_ADDR
+        goto int_complete;
+      }
+
+      if(letter1 & END_MASK){
+
+        if(letter0 == 0){
+          // printf("[OT] Cluster returned. Network execution completed! ✅\r\n");
+        }else{
+          // printf("[OT] Cluster returned. Network execution failed... ⛔\r\n");
+        }
+        // printf("[OT] Returning control to CVA6...\r\n");
+        mailbox_send(7, letter0, letter1);
+        mb_write(0x1, MBOX_CAR_INT_SND_SET(7));
+        hashmap_init();
+        goto int_complete;
+      }
+
+
+      if(letter1 & INIT_MASK){
+        if(letter1 & CLEAR_MASK){
+          //hashmap_init();
+          //TODO: verificare dimensione max / occupazione hashmap. si può fare free?
+          goto end_handler;
+        }
+        initialize_memory();
+        utils_csrng_randgen(&key,TITANSSL_TEST_WORDSIZES);
+        //printf("[OT] Hi! I am initializing, letter0 = %x, letter1 = %x\r\n",letter0,letter1);
+        // printf("[OT] Hi! I received the keys!\r\n");
+
+
+        // cluster_task = *((memory_transfer_operation_altered_t *)letter0);
+
+        cl_task = (memory_transfer_operation_altered_t *)letter0;
+
+        // printf("[OT] AES KEY : ");
+        for(int i = 0; i < 8; i++){
+          AesKey[i] = ((uint32_t *)cl_task->src)[i];
+          // printf("0x%x ", AesKey[i]);
+        }
+        // printf("\r\n");
+
+        // printf("[OT] HMAC KEY : ");
+        // for(int i = 0; i < 8; i++){
+        //   kHmacKey[i] = ((uint32_t *)cl_task->dst)[i];
+        //   // printf("0x%x ", kHmacKey[i]);
+        // }
+        // printf("\r\n");
+
+        goto end_handler;
+      }
+
+      cl_task = (memory_transfer_operation_altered_t *) letter0;  //TODO: sostituire con lettura diretta della struct da salvare in locale
+
+      if(letter1 & HMAC_MASK){
+
+        dif_hmac_t hmac;
+        test_setup(mmio_region_from_addr(TOP_EARLGREY_HMAC_BASE_ADDR), &hmac);
+
+        //cl_task->src = weight tensor address
+        //cl_task->dst = hmac address
+        //cl_task->size = weight tensor length
+
+        //TODO: cambiare notation -> con . 
+        if(run_test(&hmac, (int8_t *) cl_task->src, cl_task->size, (uint8_t *)(&kHmacKey[0]), (uint32_t *) cl_task->dst) > 0){
+          //printf("[OT] HMAC verified! ✅\r\n");
+        }else{
+          printf("[OT] HMAC check failed! ⛔ Stopping network execution...");
+          //asm volatile("wfi");
+        }
+
+        goto end_handler;
+      }
+      
+      //TODO: IV binding
+
+      if(letter1 & IV_MASK){
+        // printf("[OT] IV JUST ARRIVED : ");
+        uint32_t iv_temp = 0;
+        for(int i = 0; i < 4; i++){
+          AesTestIv[i] = ((uint32_t *)cl_task->dst)[i];
+          // printf("0x%x ", (uint32_t) AesTestIv[i]);
+        }
+        // printf("Hashmap is now %d/%d\r\n",hashmap_get_count(),TABLE_SIZE);
+        // printf("\r\n");
+        // printf("Pushing Key = ");
+        for(int i = 0; i < 8; i++){
+          printf("0x%x ",AesKey[i]);
+        }
+        // printf("Pushing  IV = ");
+        for(int i = 0; i < 4; i++){
+          // printf("0x%x ",AesTestIv[i]);
+        }
+        // printf("\r\n");
+          hashmap_push_random((uint32_t) cl_task->src, (uint32_t) cl_task->src, AesTestIv, AesKey);
+        goto end_handler;
+      }
+
+      if(cl_task->src < 0x50000000 ){
+        cl_task->src += CLUSTER_SPM_BASE_ADDR;
+      }else if (cl_task->dst < 0x50000000){
+        cl_task->dst += 0x50000000;
+      }
+
+      mmio_region_t aes;
+      aes = mmio_region_from_addr(TOP_EARLGREY_AES_BASE_ADDR);
+      //cl_task->size => n. of bytes
+
+      uint32_t cluster_father = 0x0;
+
+      //controllo se il transfer_id è presente, se si ritorno src_key e dest_key
+      //Serve solo per check se è la prima iterazione oppure no. TransferID non serve a nulla  nella logica dell'encryption.
+      // => replace del controllo con variabile static che causava stack overflow in Deeploy/cluster
+      //(forse TODO : c'è un altro modo? si può cavare transfer id?)
+      int keyRet = hashmap_get_random((uint32_t)(cl_task->transfer_id), &(cl_task->src_key),&(cl_task->dst_key), NULL);
+
+      if(keyRet == HM_FALSE){
+        cl_task->src_key = (uint32_t)cl_task->src;
+        cl_task->dst_key = (uint32_t)cl_task->dst;
+        // printf("Pushing 0x%x with 0x%x and 0x%x\r\n",cl_task->transfer_id,cl_task->src_key,cl_task->dst_key);
+        hashmap_push_random(cl_task->transfer_id,cl_task->src_key,&(cl_task->dst_key),0);
+      }
+
+      // if(cl_task->transfer_id == 0x8bf03aa5){
+      //   dump_memory_transfer((memory_transfer_operation_altered_t *)letter0,letter1);
+      // }
+
+      // printf("Hashmap is now %d on %d\r\n",hashmap_get_count(),TABLE_SIZE);
+
+
+
+
+      if(((letter1 & SECURE_MASK) && !(letter1 & GEOMETRY_MASK))){
+
+        issue_secure_1d_transfer((uint32_t)cl_task->src,(uint32_t)cl_task->src_key,(uint32_t) cl_task->dst,(uint32_t)cl_task->dst_key,cl_task->size,(letter1 & OPERATION_MASK)?DECRYPTION:ENCRYPTION,SRC_BASED);
+      }else{
+          if(!(letter1 & GEOMETRY_MASK)){
+            // printf("NON SICURO\r\n");
+            // printf("Transferring transfer_id : %x\r\n", cl_task->transfer_id);
+            next = idma_issue_1d((uint32_t) cl_task->src, (uint32_t) cl_task->dst, (uint32_t) cl_task->size);
+            wait_for_idma_eot(next);
+          }
+
+      }
+
+      
+
+      if(letter1 & GEOMETRY_MASK){
+        if((letter1 & SECURE_MASK)){
+
+          // printf("Transfer id : %x\r\n",cl_task->transfer_id);
+
+          if(cl_task->repetitions == 1){
+            // printf("Turning into 1d...\r\n");
+            // for(int i = 0; i < cl_task->size_1d; i++){
+            //   printf("PAYLOAD[%d] = %x ",i,((uint8_t *)cl_task->src)[i]);
+            // }
+
+            //***************************DEBUG*****************************
+            issue_secure_1d_transfer((uint32_t)cl_task->src,(uint32_t)cl_task->src_key,(uint32_t)cl_task->dst,(uint32_t)cl_task->dst_key,cl_task->size_1d,ENCRYPTION,DST_BASED);
+
+            goto end_handler;
+          }
+
+
+          if(letter1 & OPERATION_MASK){
+            // printf("SECURE 2D DECRYPTION\r\n");
+
+            // printf("Len = %d\r\n",cl_task->size_1d);
+
+            issue_idma_2d_secure_emulated_ext_strided_dec((uint32_t)cl_task->src,(uint32_t)cl_task->src_key,(uint32_t)cl_task->dst,(uint32_t)cl_task->dst_key, cl_task->size_1d, cl_task->src_stride,cl_task->repetitions);
+
+          }
+          else{
+
+          // printf("SECURE 2D ENCRYPTION\r\n");
+          // printf("current transfer id = %x cl_task->id = %x\r\n",buffer2d.transfer_id,cl_task->transfer_id);
+          //Aes key e Iv ci sono
+          //father anche
+
+          if(buffer2d.transfer_id != cl_task->transfer_id){
+              // printf("2D BUFFER INIT!!!!!!!!!!! \r\n");
+              // printf("repetitions: %d\r\n", cl_task->repetitions);
+              // printf("stride: %d\r\n", cl_task->dst_stride);
+              // if(cl_task->repetitions == 1){
+              //   buffer2d.size_total = 2048;
+              // }
+              //else{
+                buffer2d.size_total = (uint32_t) cl_task->dst_stride * cl_task->repetitions;
+              //}
+
+              // printf("size_total: %d\r\n", buffer2d.size_total);            
+              buffer2d.size_partial = (uint32_t) 0;
+              buffer2d.transfer_id = (uint32_t) cl_task->transfer_id;
+              //buffer2d.start = (uint32_t ) (0x50200000 - buffer2d.size_total); 
+              // buffer2d.start = (uint32_t ) (0x50100000); 
+              buffer2d.start = (uint32_t ) (0x80070000); // =>>>>>>>>>>>>>>>>>>>>>>>>>>>> sto salvando plaintext in L3 :) !!!!!!!!!!!!!!!!!!!
+
+              buffer2d.dst = (uint32_t) cl_task->dst;
+              // printf("COMPUTING 2D BUFFER START @ %x\r\n", buffer2d.start);
+
+              //  printf("VS CLUSTER:\r\n\r\n");
+              //   for(int i = 0; i < buffer2d.size_total/4 ; i++){
+              // printf("%x ",((uint32_t *)cl_task->src)[i]);
+              // if(i != 0 && i % 16 == 0){
+              //   printf("\r\n");
+              // }
+            }else{
+              // printf("Size 1d : %d\r\n",cl_task->size_1d);
+              // printf("repetitions: %d\r\n", cl_task->repetitions);
+              // printf("stride: %d\r\n", cl_task->dst_stride);
+              // printf("buffer2d start = %x\r\n",buffer2d.start);
+              // printf("buffer2d.dst  = %x\r\n",buffer2d.dst);
+              // printf("PARTIAL SIZE (already buffered) = %d\r\n",buffer2d.size_partial);
+          }
+
+          // printf("TILE BEGIN\r\n");
+
+          // for(int i = 0; i < cl_task->repetitions ; i++){
+          //   for(int j = 0 ; j < cl_task->size_1d; j++){
+          //     printf("@%x= %x \t", &((uint8_t *)cl_task->src)[(i * cl_task->size_1d) + j], ((uint8_t *)cl_task->src)[(i * cl_task->size_1d) + j]);
+          //   }
+          //   printf("\r\n");
+          // }
+
+          // printf("TILE END-------\r\n");
+          issue_idma_2d_emulated_ext_strided((uint32_t) cl_task->src, 
+          (uint32_t) buffer2d.start, 
+          (uint32_t) cl_task->size_1d, 
+          (uint32_t) cl_task->dst_stride, 
+          (uint32_t) cl_task->repetitions);
+
+          buffer2d.start += (uint32_t) cl_task->size_1d;
+          // printf("Partial = %d, total = %d\r\n",buffer2d.size_partial,buffer2d.size_total);
+          buffer2d.size_partial += cl_task->size_1d * cl_task->repetitions;
+
+          if(buffer2d.size_total == buffer2d.size_partial){
+          
+            // printf("2D TRANSFER END, STARTING ENCRYPTION...\r\n");
+            //CIFRA/DECIFRA e TRASFERISCI IN DST (cluster/l2)
+
+            //TODO: CSRNG key & IV
+            utils_csrng_randgen(&key, TITANSSL_TEST_WORDSIZES);
+            //in key.data 18 random words
+            uint32_t * temp_data = (uint32_t *) key.data;
+
+            // AesTestIv[0]= 0x0;
+            // AesTestIv[1]= 0x0;
+            // AesTestIv[2]= 0x0;
+            // AesTestIv[3]= 0xCACACACA;
+
+            // AesTestKey[0]= 0xABCDEABC;
+            // AesTestKey[1]= 0x0;
+            // AesTestKey[2]= 0xFFFFFFFF;
+            // AesTestKey[3]= 0xCAAAAAAA;
+            // AesTestKey[4]= 0x0;
+            // AesTestKey[5]= 0xFFFFFFFF;
+            // AesTestKey[6]= 0xFFFFFFFF;
+            // AesTestKey[7]= 0xFFFFFFFF;     
+
+            AesTestIv[0]= temp_data[0];
+            AesTestIv[1]= temp_data[1];
+            AesTestIv[2]= temp_data[2];
+            AesTestIv[3]= temp_data[3];
+
+            AesTestKey[0]= temp_data[4];
+            AesTestKey[1]= temp_data[5];
+            AesTestKey[2]= temp_data[6];
+            AesTestKey[3]= temp_data[7];
+            AesTestKey[4]= temp_data[8];
+            AesTestKey[5]= temp_data[9];
+            AesTestKey[6]= temp_data[10];
+            AesTestKey[7]= temp_data[11];    
+
+
+
+            aes_init(AesTestIv, AesTestKey);
+            // printf("Initializing AES with IV : %X %X %X %X\r\n", AesTestIv[0],AesTestIv[1],AesTestIv[2],AesTestIv[3]);
+            // printf("Initializing AES with KEY : %X %X %X %X %X %X %X %X\r\n", AesTestKey[0],AesTestKey[1],AesTestKey[2],AesTestKey[3],AesTestKey[4],AesTestKey[5],AesTestKey[6],AesTestKey[7]);
+          
+
+
+          // uint32_t volatile * start_addr = (uint32_t *) (0x50100000); 
+          uint32_t volatile * start_addr = (uint32_t *) (0x80070000); 
+
+          // printf("MATRICE COMPLETA LESGO\r\n");
+          // int rows = cl_task->repetitions;
+          // int columns = (buffer2d.size_total) / cl_task->repetitions;
+          // printf("Rows = %d, Coolumns = %d\r\n",rows,columns);
+          // // uint32_t cur22=0;
+          //   for(int i = 0; i < rows; i++){
+          //     for(int j = 0; j < columns; j++){
+          //       printf("MAT[%d] = %x\t",i*columns + j,((uint8_t *)start_addr)[((i*columns)+j)]);
+
+          //     }
+          //     printf("\r\n");
+          //   }
+          
+          // printf("STARTING AES OPERATIONS @ %x\r\n", start_addr);
+          uint32_t count = 0;
+          uint32_t cur;
+
+          for (uint32_t i=0; i < (buffer2d.size_total/4); i+=4) {
+
+            // // printf("ENCRYPTING PAYLOAD: %x %x %x %x \r\n", start_addr[i*4], start_addr[(i+1)*4], start_addr[(i+2)*4], start_addr[(i+3)*4]);
+            // mmio_region_write32(aes, _aes_get_datainreg(0), start_addr[i*4]);
+            // mmio_region_write32(aes, _aes_get_datainreg(1), start_addr[(i+1)*4]);
+            // mmio_region_write32(aes, _aes_get_datainreg(2), start_addr[(i+2)*4]);
+            // mmio_region_write32(aes, _aes_get_datainreg(3), start_addr[(i+3)*4]);
+
+            //L1 version, just for the sake of trying without that faulty tcdm
+            // printf("ENCRYPTING PAYLOAD: %x %x %x %x \r\n", start_addr[i], start_addr[(i+1)], start_addr[(i+2)], start_addr[(i+3)]);
+            mmio_region_write32(aes, _aes_get_datainreg(0), start_addr[i]);
+            mmio_region_write32(aes, _aes_get_datainreg(1), start_addr[(i+1)]);
+            mmio_region_write32(aes, _aes_get_datainreg(2), start_addr[(i+2)]);
+            mmio_region_write32(aes, _aes_get_datainreg(3), start_addr[(i+3)]);
+
+          
+            while(!mmio_region_get_bit32(aes, AES_STATUS_REG_OFFSET, AES_STATUS_OUTPUT_VALID_BIT));
+            for (size_t j = 0; j < 4; j++) {
+              tcdm[(j + count)*4] = mmio_region_read32(aes, AES_DATA_OUT_0_REG_OFFSET + j*4);
+              cur = tcdm[j + count];
+              // printf("CUR: %x\r\n", tcdm[(j + count)*4]);
+
+            }
+              count += 4;
+          }
+
+          // printf("Encrypted payload\r\n");
+
+          // for(int i = 0; i < buffer2d.size_total/4 ; i++){
+          //   printf("%x, ",tcdm[i*4]);
+          //   if(i != 0 && i % 16 == 0){
+          //     printf("\r\n");
+          //   }
+          // }
+
+            // printf("DONE ENCRYPTING, MOVING DATA @ %x\r\n",buffer2d.dst);
+            hashmap_push_random((uint32_t) buffer2d.dst, (uint32_t) buffer2d.dst, AesTestIv, AesTestKey);
+
+              //next = idma_issue_1d((uint32_t) start_addr, (uint32_t) buffer2d.dst, (uint32_t) buffer2d.size_total);
+            next = idma_issue_1d((uint32_t) TCDM_BASE, (uint32_t) buffer2d.dst, (uint32_t) buffer2d.size_total);
+            
+            //next = idma_issue_1d((uint32_t) (uint32_t *) (0x80020000 - buffer2d.size_total), (uint32_t) buffer2d.dst, (uint32_t) buffer2d.size_total);
+            wait_for_idma_eot(next);        
+            
+            buffer2d.size_total = 0;
+            buffer2d.transfer_id = 0;
+            buffer2d.start = 0;
+            buffer2d.size_partial = 0;
+            buffer2d.dst = 0;
+            
+
+          }
+
+          }
+
+
+
+        }else{
+          // printf("NON-SECURE 2D\r\n");
+          // printf("cl_task->src = %x\r\n", cl_task->src);
+          // printf("cl_task->dst = %x\r\n", cl_task->dst);
+          // printf("cl_task->size_1d = %d\r\n", cl_task->size_1d);
+          // printf("cl_task->dst_stride = %d\r\n", cl_task->dst_stride);
+          // printf("cl_task->repetitions = %d\r\n\r\n", cl_task->repetitions);
+
+          if(cl_task->repetitions == 1){
+            uint32_t offset; 
+            offset = (uint32_t)cl_task->dst - (uint32_t)cl_task->dst_key;
+
+            next = idma_issue_1d((uint32_t) cl_task->src, (uint32_t) cl_task->dst, (uint32_t) cl_task->size_1d);
+            wait_for_idma_eot(next);
+
+
+            // printf("In dst...\r\n");
+            // for(int i = 0; i < cl_task->size_1d; i++){
+            //   printf("@0x%x = 0x%x ",&(((uint8_t *)cl_task->dst)[i]),((uint8_t *)cl_task->dst)[i]);
+            // }
+            // printf("\r\n");
+
+          }
+          else{
+            issue_idma_2d_emulated_strided((uint32_t) cl_task->src, 
+                    (uint32_t) cl_task->dst, 
+                    (uint32_t) cl_task->size_1d, 
+                    (uint32_t) cl_task->src_stride,
+                    (uint32_t) cl_task->dst_stride, 
+                    (uint32_t) cl_task->repetitions);
+          }   
+        }
+
+
+
+        // if(*pointer == 0){
+        //   pointer =(int8_t *) cl_task->dst;
+        // }
+        // else{
+
+        // printf("MATRICE COMPLETA LESGO\r\n");
+        //     int rows = cl_task->repetitions;
+        //     int columns = (cl_task->dst_stride * cl_task->repetitions) / cl_task->repetitions;
+        //     printf("Rows = %d, Coolumns = %d\r\n",rows,columns);
+        //     uint32_t cur22=0;
+        //       for(int i = 0; i < rows; i++){
+        //         for(int j = 0; j < columns; j++){
+        //           printf("MAT[%d] = %x\t",i*columns + j,((uint8_t *)pointer)[((i*columns)+j)]);
+
+        //         }
+        //         printf("\r\n");
+        //       }
+        // }
+
+      }
+    
+
+end_handler:
+      #ifdef OT_BENCHMARK
+      uint32_t end_handler_cycles = ibex_mcycle_read();
+      printf("[OT BENCHMARKING] letter1 = %x, cycles = %d\r\n", letter1, (end_handler_cycles - start_handler_cycles));
+      #endif
+      //triggering cluster EU
+      uint32_t value = (uint32_t) 0x1;                                        //Cluster coreSet mask (0x1 = core0)
+      uint32_t* eu_addr = (uint32_t *) eu_evt_trig_cluster_addr(IDMA_EVENT);  //Computing eu doorbell address
+
+      // eu_dispatch_push(dato_da_passare);          // 1. metti il dato in coda
+
+      // uint32_t value = (uint32_t) 0x1;             // 2. coreSet mask
+      // uint32_t* eu_addr = (uint32_t *) eu_evt_trig_addr(IDMA_EVENT);  // 3. calcola indirizzo trigger
+
+      // *eu_addr = value;                             // 4. risveglia il core, che troverà il dato già pronto
+
+      //ringing EU
+      *eu_addr = value;
+  
+    }
+int_complete:
+    *PLIC_CLAIM_COMPLETE = iid;
+    return;
+}
+
+
+
+
+
+void issue_secure_1d_transfer(uint32_t src, uint32_t src_key, uint32_t dst, uint32_t dst_key, uint32_t size,enum operation_enum operation,enum offset_enum offset_base){
+
+  volatile uint32_t *tcdm = (uint32_t *)TCDM_BASE;
+
+  mmio_region_t aes = mmio_region_from_addr(TOP_EARLGREY_AES_BASE_ADDR);
+
+  uint32_t cluster_father = 0x0;
+
+  /*
+    Nuovo approccio basato su campi aggiuntivi nel memory_transfer_representation_t, 
+    di base la hashmap servirà solamente in un caso..., ossia quando si sta cifrando/decifrando attivazioni
+  */
+
+          //IPOTESI per buttare transfer id
+          int hashRet = hashmap_get_random((uint32_t)(src_key), &cluster_father, AesTestIv, AesTestKey);
+
+            if(hashRet == HM_FALSE){
+                //possono solo essere attivazioni in cifratura 
+                if(operation == DECRYPTION){
+                    printf("[OT] ERROR - no data in hashmap?!\r\n");
+                    asm volatile("wfi");
+                }else{
+                  //QUI SOLO ACTIVATIONS
+                  /*
+                    Metto in hashmap la destinazione in modo che a tempo debito si possa decifrare il vettore 
+                    Non c'è bisogno di pushare src per lo stesso motivo di sopra, è già incluso nel task...
+                  */
+                    
+                    // cluster_father = (uint32_t) dst;
+                    // printf("ENCRYPTION, pushing dst = %x , IV and key\r\n", dst_key);
+
+                    //TODO: CSRNG key
+
+                    // AesTestKey[0]= 0x0;
+                    // AesTestKey[1]= (uint32_t) dst_key;
+                    // AesTestKey[2]= 0x0;
+                    // AesTestKey[3]= 0x0;
+                    // AesTestKey[4]= (uint32_t) dst_key;
+                    // AesTestKey[5]= 0x0;
+                    // AesTestKey[6]= (uint32_t) dst_key;
+                    // AesTestKey[7]= (uint32_t) dst_key;        
+
+                    // AesTestIv[0]= 0x0;
+                    // AesTestIv[1]= 0x0;
+                    // AesTestIv[2]= (uint32_t) dst_key;
+                    // AesTestIv[3]= 0xCACACACA;
+
+                    // utils_csrng_randgen(&key, TITANSSL_TEST_WORDSIZES);
+                    //in key.data 18 random words
+                    // uint32_t * temp_data = (uint32_t *) key.data;
+
+                    // AesTestIv[0]= 0x0;
+                    // AesTestIv[1]= 0x0;
+                    // AesTestIv[2]= 0x0;
+                    // AesTestIv[3]= 0xCACACACA;
+
+                    // AesTestKey[0]= 0xABCDEABC;
+                    // AesTestKey[1]= 0x0;
+                    // AesTestKey[2]= 0xFFFFFFFF;
+                    // AesTestKey[3]= 0xCAAAAAAA;
+                    // AesTestKey[4]= 0x0;
+                    // AesTestKey[5]= 0xFFFFFFFF;
+                    // AesTestKey[6]= 0xFFFFFFFF;
+                    // AesTestKey[7]= 0xFFFFFFFF;     
+
+                    AesTestIv[0]= (uint32_t)src;
+                    AesTestIv[1]= 0;
+                    AesTestIv[2]= (uint32_t)dst;
+                    AesTestIv[3]= 0;
+
+                    AesTestKey[0]= key.data[4];
+                    AesTestKey[1]= key.data[5];
+                    AesTestKey[2]= key.data[6];
+                    AesTestKey[3]= key.data[7];
+                    AesTestKey[4]= key.data[8];
+                    AesTestKey[5]= key.data[9];
+                    AesTestKey[6]= key.data[10];
+                    AesTestKey[7]= key.data[11];    
+
+                    hashmap_push_random((uint32_t) dst_key, dst_key, AesTestIv, AesTestKey);
+                    if(offset_base == SRC_BASED)
+                      cluster_father = src_key;
+                    else
+                      cluster_father = dst_key;
+
+
+                    // //!!!!
+                    // //>>>>>RIPORTO CLUSTER_FATHER A SRC, ALTRIMENTI SI ROMPE LOGICA DI IV UPDATE
+                    // cluster_father = (uint32_t) src;
+                } 
+            }else{
+                //PESI o ATTIVAZIONI entrambe in decryption
+                // printf("[OT] GETTING AES IV : %x %x %x %x\r\n", (uint32_t) AesTestIv[0], (uint32_t) AesTestIv[1],(uint32_t) AesTestIv[2],(uint32_t) AesTestIv[3]);
+            
+                /*
+                  Se sto decifrando attivazioni non serve aggiungere niente alla hashmap, 
+                  basta continuare a leggere src_key. IV e KEY sono già state lette con il controllo 
+                  nella hashmap
+                */
+                if(operation != DECRYPTION){
+                  //sto decifrando => tutto ok!
+                  // printf("Transfer in hashmap!\r\n");
+                  // printf("Decrypting data from %X\r\n", (uint32_t) src);
+                  //Non serve pushare il next src, la key sarà la stessa :)
+                  // uint32_t next_src = (uint32_t) src + (uint32_t) size;
+                  // if(push_next)
+                  //   hashmap_push_random(next_src, cluster_father, AesTestIv, AesTestKey);
+                  printf("ERROR!!!!!!!!!!\r\n");
+                  printf("Going to sleep..."); 
+                  asm volatile ("wfi");
+                }
+            }
+        
+          // printf("SECURE 1D\r\n");
+
+            uint32_t mod,aligned_src,aligned_size,count_iv;
+            bool misaligned_end;
+            uint32_t updated_src = (uint32_t) TCDM_BASE;
+
+
+
+            if(offset_base == SRC_BASED){
+              //check di alignment per src_address
+              //se il src address è in mezzo a un pacchetto da 16 byte, mi sposto indietro
+              //per allinearlo a 16 byte
+              mod = ((uint32_t) src - (uint32_t) cluster_father) % 16;
+              aligned_src = (uint32_t) src;
+              aligned_size = size;
+              if(mod != 0){
+                aligned_src = (uint32_t) src - mod;
+                aligned_size += mod;
+                updated_src += mod;
+              }
+
+              //check di alignment per end_address (src+size)
+              //se l'end address è in mezzo a un pacchetto da 16 byte, mi sposto avanti
+              //per allinearlo a 16 byte
+              misaligned_end = false;
+              mod = (((uint32_t) src + (uint32_t) size) - (uint32_t) cluster_father) % 16;
+              if(mod != 0){
+                aligned_size += 16 - mod;
+                misaligned_end = true;
+              }
+
+              count_iv = (aligned_src - cluster_father) / 16;
+              
+              if(count_iv != 0){
+                // printf("I'm updating IV...\r\n");
+                add_u128_leword_visual(AesTestIv, count_iv);
+              }
+          }
+          else{
+            //Analogo a sopra, ma con un twist. I parametri vanno calcolati su dst, e poi applicati a src
+            //Questo in quanto la locazione di memoria coerente è in dst
+
+            //check di alignment per dst_address
+            //se il dst address è in mezzo a un pacchetto da 16 byte, sposto indietro src
+            //per allinearlo a 16 byte
+            mod = ((uint32_t) dst - (uint32_t) cluster_father) % 16;
+            aligned_src = (uint32_t) src;
+            uint32_t aligned_dst = dst - mod;
+            aligned_size = size;
+            if(mod != 0){
+              aligned_src = (uint32_t) src - mod;
+              aligned_size += mod;
+              updated_src += mod;
+            }
+
+            //check di alignment per end_address (dst+size)
+            //se l'end address è in mezzo a un pacchetto da 16 byte, mi sposto avanti
+            //per allinearlo a 16 byte
+            misaligned_end = false;
+            mod = (((uint32_t) dst + (uint32_t) size) - (uint32_t) cluster_father) % 16;
+            if(mod != 0){
+              aligned_size += 16 - mod;
+              misaligned_end = true;
+            }
+
+            count_iv = (aligned_dst - cluster_father) / 16;
+            
+            if(count_iv != 0){
+              // printf("I'm updating IV...\r\n");
+              add_u128_leword_visual(AesTestIv, count_iv);
+            }
+
+          }
+
+          
+
+            aes_init(AesTestIv, AesTestKey);
+            // printf("Initializing AES with IV : %X %X %X %X\r\n", AesTestIv[0],AesTestIv[1],AesTestIv[2],AesTestIv[3]);
+            // printf("Initializing AES with KEY : %X %X %X %X %X %X %X %X\r\n", AesTestKey[0],AesTestKey[1],AesTestKey[2],AesTestKey[3],AesTestKey[4],AesTestKey[5],AesTestKey[6],AesTestKey[7]);
+            
+            // printf("offset_base = %x \r\n",cluster_father);
+            // printf("misaligned end ? %d\r\n", misaligned_end);
+            // printf("aligned_size = %d\r\n", aligned_size);
+            // printf("size = %d\r\n", size);
+            // printf("aligned_src = %x\r\n", aligned_src);
+            // printf("updated_src = %x\r\n", updated_src);
+            // printf("src = %x\r\n", src);
+            // printf("dst = %x\r\n", dst);
+            // printf("src_key = %x\r\n", src_key);
+            // printf("dst_key = %x\r\n", dst_key);
+            // printf("Offset = %x\r\n",count_iv);
+            
+
+            //effettuo il trasferimento con source e size aggiornati
+            int buf = idma_issue_1d(aligned_src,(uint32_t) TCDM_BASE, aligned_size);
+            wait_for_idma_eot(buf);
+
+            // for(int i = 0; i < size / 4; i++){
+            //   printf("src[%d] = %x, dst[%d] = %x\r\n",i,((uint32_t *)aligned_src)[i],i,tcdm[i*4]);
+            // }
+
+            uint32_t count = 0;
+            uint32_t cur ;
+            for (uint32_t i=0; i < (aligned_size/4); i+=4) {
+                mmio_region_write32(aes, _aes_get_datainreg(0), tcdm[i*4]); 
+                mmio_region_write32(aes, _aes_get_datainreg(1), tcdm[(i+1)*4]);
+                mmio_region_write32(aes, _aes_get_datainreg(2), tcdm[(i+2)*4]);
+                mmio_region_write32(aes, _aes_get_datainreg(3), tcdm[(i+3)*4]);
+              
+                while(!mmio_region_get_bit32(aes, AES_STATUS_REG_OFFSET, AES_STATUS_OUTPUT_VALID_BIT));
+                for (size_t j = 0; j < 4; j++) {
+                  tcdm[(j + count)*4] = mmio_region_read32(aes, AES_DATA_OUT_0_REG_OFFSET + j*4);
+                  cur = tcdm[j + count];
+                  //printf("CUR = %x \r\n",tcdm[(j + count)*4]);
+
+
+                }
+                  count += 4;
+
+            }
+            // printf("\r\n");
+
+            int buff;
+
+            // if(operation == DECRYPTION){
+            //   printf("Decrypted payload...");
+
+            //   for(int i = 0; i < size; i++){
+            //     if(i != 0 && i%16 == 0)
+            //       printf("\r\n");
+            //     printf("%d ",((int8_t *)updated_src)[i*4]);
+            //   }
+            // printf("\r\n");
+            // }
+
+
+
+
+            buff = idma_issue_1d((uint32_t) updated_src, (uint32_t) dst, (size));
+
+
+
+
+            wait_for_idma_eot(buff);
+}
+
+void issue_idma_2d_secure_emulated_ext_strided_dec(uint32_t src, uint32_t src_key,uint32_t dst,uint32_t dst_key,uint32_t len, uint32_t d_stride, uint32_t reps){
+    int id;
+    for (uint32_t i = 0; i < reps; i++) {
+        issue_secure_1d_transfer(src + d_stride * i,src_key, dst + (i * len),dst_key, len,DECRYPTION,false);
+    }
+
+    //TODO: double buffering
+}
+
+static inline void writew(uint32_t val, uintptr_t addr)
+{
+	asm volatile("sw %0, 0(%1)"
+		     :
+		     : "r"(val), "r"((volatile uint32_t *)addr)
+		     : "memory");
+}
+
+void pulp_cluster_kick_off(void* boot_addr){
+
+    volatile uint32_t cluster_boot_reg_addr = 0x50200040;
+
+    for (int i = 0; i < 8; i++) {
+      writew((uint32_t) boot_addr, cluster_boot_reg_addr);
+      cluster_boot_reg_addr += 0x4;
+    }
+
+    //pulp_cluster_start
+    writew(1, INT_CLUSTER_BOOTEN_ADDR);
+    writew(1, INT_CLUSTER_FETCHEN_ADDR);
+
+}
+
+
+
+
+
+
