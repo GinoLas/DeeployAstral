@@ -18,6 +18,9 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Set, 
 
 from .CryptONNX import ONNXEncryptor
 
+AES_KEY_HEX = "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFABCD"
+ENCRYPTOR = ONNXEncryptor(AES_KEY_HEX, "00" * 32)
+
 
 
 import mako
@@ -1125,15 +1128,15 @@ class NodeParser():
         if 'hmac' not in node.attrs:
             return ctxt
         
-        print(node.name)
+        #print(node.name)
         
         for input in node.inputs:
             if(isinstance(input,gs.Constant) and not ctxt.is_global(f"{input.name}_hmac")):
-                print("Found hmac")
+                #print("Found hmac")
                 hmac = node.attrs[(f"{input.name}_hmac")]
                 ctxt.hoistConstant(hmac)
             if (isinstance(input,gs.Constant) and not ctxt.is_global(f"{input.name}_iv")):
-                print("Found iv")
+                #print("Found iv")
                 iv = node.attrs[(f"{input.name}_iv")]
                 ctxt.hoistConstant(iv)
         return ctxt
@@ -1165,7 +1168,7 @@ class NodeParser():
         for inputNode in node.inputs:
             data_in = inputNode.name
 
-            print(f"INPUT : {data_in}")
+            #print(f"INPUT : {data_in}")
 
             # Hoist constant inputs
             if type(inputNode) == gs.ir.tensor.Constant and not ctxt.is_global(data_in):
@@ -1300,7 +1303,7 @@ class NodeTypeChecker():
         self.input_types = input_types
         self.output_types = output_types
 
-        # print(input_types)
+        # #print(input_types)
 
         self.typeDict: Dict[str, Type[Pointer]] = {
         }  #: Dict[str, Type[Pointer]]: Stores the type assignment of the input and output tensors, mapping them to the names defined by the NodeParser
@@ -2029,7 +2032,8 @@ class ONNXLayer():
                 # Update shape of tensors in onnx graph
                 node.shape = newShape
 
-                # WIESEP: It is possible that the type was not yet set, so we assume some default type
+
+ # WIESEP: It is possible that the type was not yet set, so we assume some default type
                 # At this state, we assume that all local buffers are float32 type inference is not yet done.
                 if node.dtype is None:
                     node.dtype = np.float32
@@ -2037,182 +2041,30 @@ class ONNXLayer():
             elif ctxt.is_global(node.name):
                 ctxt.globalObjects[node.name].shape = newShape
                 if isinstance(ctxt.globalObjects[node.name], ConstantBuffer):
+                    const = ctxt.globalObjects[node.name]
 
                     # If the number of elements is equal, reshape
-                    if np.prod(ctxt.globalObjects[node.name].values.shape) == np.prod(newShape):
-                        ctxt.globalObjects[node.name].values.reshape(newShape)
-                        if(np.prod(newShape) % 16 != 0):
-                            print("IF branch 😎")
-                            print("Node name: ", node.name)
-                            print("ctxt.globalObjects[node.name].values: ", ctxt.globalObjects[node.name].values)
-                            print(ctxt.globalObjects[node.name].__dict__)
-
-                            bytes_encrypted = ctxt.globalObjects[node.name].values.tobytes()
-
-                            key = bytes.fromhex("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFABCD")
-                            nonce = bytes.fromhex("000000000000000000000000CACACACA")
-
-                            iv = ctxt.globalObjects[f"{node.name}_iv"]
-                            print(node.name)
-                            print(iv.values)
-
-                            nonce = iv.values.tobytes()
-
-                            cipher = Cipher(algorithms.AES(key), modes.CTR(nonce))
-                            decryptor = cipher.decryptor()
-
-                            bytes_plaintext = decryptor.update(bytes_encrypted) + decryptor.finalize()
-
-                            # 6. Riconversione dei byte decifrati in 4 interi a 32 bit
-                            array_plaintext = np.frombuffer(bytes_plaintext, dtype=np.int32)
-
-                            # --- Output di verifica ---
-                            print("Byte cifrati (hex):", bytes_encrypted.hex())
-                            print("Array decifrato:", array_plaintext)
-
-                            ctxt.globalObjects[node.name].values = np.trim_zeros(array_plaintext, 'b')
-                            print("Array trimmato: ", ctxt.globalObjects[node.name].values)
-
-                            ctxt.globalObjects[node.name].values = np.broadcast_to(ctxt.globalObjects[node.name].values,
-                                                                                    newShape)
-                            #qui anche i bias che sono un singolo valore vengono "propagati" (broadcast)
-                            #es. mul tensor di miniMobileNet, che nel ONNX è un singolo valore
-
-                            # Ora, qui c'è il plaintext in values con già fatto il broadcast 
-                            # [val, val, val, ...., val] "newShape" volte
-                            # ====> Va cifrato di nuovo con zero-padding a blocchi di 16 byte
-
-                            # 1. Recuperiamo l'array dopo il broadcast
-                            array_plaintext = ctxt.globalObjects[node.name].values
-
-                            # 2. Calcoliamo quanti elementi mancano per essere multipli di 16 byte (multipli di 4 elementi int32)
-                            # len(array_plaintext) % 4 ci dice quanti elementi "eccedono" l'ultimo blocco da 4
-                            elementi_mancanti = (4 - (len(array_plaintext) % 4)) % 4
-
-                            # 3. Se mancano elementi, applichiamo lo zero-padding alla fine dell'array
-                            if elementi_mancanti > 0:
-                                array_plaintext = np.pad(array_plaintext, (0, elementi_mancanti), 'constant', constant_values=0)
-
-                            # 4. Convertiamo l'array (ora allineato a 16 byte) in formato byte
-                            bytes_new_plaintext = array_plaintext.tobytes()
-
-                            # 5. Inizializziamo il cifrario (stessa chiave e stesso nonce)
-                            cipher_encrypt = Cipher(algorithms.AES(key), modes.CTR(nonce))
-                            encryptor = cipher_encrypt.encryptor()
-
-                            # 6. Cifriamo i byte (compreso lo zero-padding inserito)
-                            bytes_new_encrypted = encryptor.update(bytes_new_plaintext) + encryptor.finalize()
-
-                            # 7. Convertiamo i byte cifrati nuovamente in un array NumPy int32
-                            array_new_encrypted = np.frombuffer(bytes_new_encrypted, dtype=np.int32).copy()
-
-                            # 8. Sovrascriviamo l'oggetto globale con il nuovo array cifrato e con padding
-                            ctxt.globalObjects[node.name].values = array_new_encrypted
-
-                            # --- Output di verifica finale ---
-                            print(f"Dimensione finale array: {len(array_new_encrypted)} elementi ({len(bytes_new_encrypted)} byte)")
-                            print("Nuovo Array cifrato (primi elementi):", ctxt.globalObjects[node.name].values)
-                            ctxt.globalObjects[node.name].shape = len(array_new_encrypted)
-                            
+                    # (l'ordine dei byte non cambia: un cifrato resta valido)
+                    if np.prod(const.values.shape) == np.prod(newShape):
+                        const.values.reshape(newShape)
 
                     # The number of elements SHOULD be lower, and we broadcast
-                    #                        |-----> YES BUT, not guaranteed in this implementation (DeeployAstral)
-                    elif np.prod(ctxt.globalObjects[node.name].values.shape) > np.prod(newShape):
-                            print("SONO NELL'ELIF")
-                            print("Node name: ", node.name)
-                            print(ctxt.globalObjects[node.name].__dict__)
-                            print("newShape: ", newShape)
-                            print("ctxt.globalObjects[node.name].values: ", ctxt.globalObjects[node.name].values)
-                            print("ctxt.globalObjects[node.name].values.shape: ", ctxt.globalObjects[node.name].values.shape)
-                            ctxt.globalObjects[node.name].shape = ctxt.globalObjects[node.name].values.shape
-
                     else:
+                        iv_name = f"{node.name}_iv"
                         try:
-                            print("SHOULD branch 😎")
-                            print("Node name: ", node.name)
-                            print("ctxt.globalObjects[node.name].values: ", ctxt.globalObjects[node.name].values)
-                            print(ctxt.globalObjects[node.name].__dict__)
-
-                            bytes_encrypted = ctxt.globalObjects[node.name].values.tobytes()
-
-                            key = bytes.fromhex("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFABCD")
-                            nonce = bytes.fromhex("000000000000000000000000CACACACA")
-
-                            iv = ctxt.globalObjects[f"{node.name}_iv"]
-                            print(node.name)
-                            print(iv.values)
-
-                            nonce = iv.values.tobytes()
-
-                            cipher = Cipher(algorithms.AES(key), modes.CTR(nonce))
-                            decryptor = cipher.decryptor()
-
-                            bytes_plaintext = decryptor.update(bytes_encrypted) + decryptor.finalize()
-
-                            # 6. Riconversione dei byte decifrati in 4 interi a 32 bit
-                            array_plaintext = np.frombuffer(bytes_plaintext, dtype=np.int32)
-
-                            # --- Output di verifica ---
-                            print("Byte cifrati (hex):", bytes_encrypted.hex())
-                            print("Array decifrato:", array_plaintext)
-
-                            ctxt.globalObjects[node.name].values = np.trim_zeros(array_plaintext, 'b')
-                            print("Array trimmato: ", ctxt.globalObjects[node.name].values)
-
-                            ctxt.globalObjects[node.name].values = np.broadcast_to(ctxt.globalObjects[node.name].values,
-                                                                                   newShape)
-                            #qui anche i bias che sono un singolo valore vengono "propagati" (broadcast)
-                            #es. mul tensor di miniMobileNet, che nel ONNX è un singolo valore
-
-                            # Ora, qui c'è il plaintext in values con già fatto il broadcast 
-                            # [val, val, val, ...., val] "newShape" volte
-                            # ====> Va cifrato di nuovo con zero-padding a blocchi di 16 byte
-
-                            # 1. Recuperiamo l'array dopo il broadcast
-                            array_plaintext = ctxt.globalObjects[node.name].values
-
-                            # 2. Calcoliamo quanti elementi mancano per essere multipli di 16 byte (multipli di 4 elementi int32)
-                            # len(array_plaintext) % 4 ci dice quanti elementi "eccedono" l'ultimo blocco da 4
-                            elementi_mancanti = (4 - (len(array_plaintext) % 4)) % 4
-
-                            # 3. Se mancano elementi, applichiamo lo zero-padding alla fine dell'array
-                            if elementi_mancanti > 0:
-                                array_plaintext = np.pad(array_plaintext, (0, elementi_mancanti), 'constant', constant_values=0)
-
-                            # 4. Convertiamo l'array (ora allineato a 16 byte) in formato byte
-                            bytes_new_plaintext = array_plaintext.tobytes()
-
-                            # 5. Inizializziamo il cifrario (stessa chiave e stesso nonce)
-                            cipher_encrypt = Cipher(algorithms.AES(key), modes.CTR(nonce))
-                            encryptor = cipher_encrypt.encryptor()
-
-                            # 6. Cifriamo i byte (compreso lo zero-padding inserito)
-                            bytes_new_encrypted = encryptor.update(bytes_new_plaintext) + encryptor.finalize()
-
-                            # 7. Convertiamo i byte cifrati nuovamente in un array NumPy int32
-                            array_new_encrypted = np.frombuffer(bytes_new_encrypted, dtype=np.int32).copy()
-
-                            # 8. Sovrascriviamo l'oggetto globale con il nuovo array cifrato e con padding
-                            ctxt.globalObjects[node.name].values = array_new_encrypted
-
-                            # --- Output di verifica finale ---
-                            print(f"Dimensione finale array: {len(array_new_encrypted)} elementi ({len(bytes_new_encrypted)} byte)")
-                            print("Nuovo Array cifrato (primi elementi):", ctxt.globalObjects[node.name].values)
-                            ctxt.globalObjects[node.name].shape = len(array_new_encrypted)
-
-
-                            # =====> (future works: valutare cifratura qui / estendere cryptOnnx con moduli/functions chiamabili qui )
-
-
-
-                        except:
+                            if iv_name in ctxt.globalObjects:
+                                # costante cifrata: decifra, espandi il chiaro, ricifra tutto
+                                iv = ctxt.globalObjects[iv_name].values.tobytes()
+                                const.values = ENCRYPTOR.broadcast_encrypted(const.values, iv, newShape)
+                            else:
+                                const.values = np.broadcast_to(const.values, newShape)
+                        except Exception as e:
                             raise RuntimeError(
-                                f"Could not broadcast {node.name} from {ctxt.globalObjects[node.name].values.shape} to {newShape}!"
-                            )
+                                f"Could not broadcast {node.name} from {const.values.shape} to {newShape}!"
+                            ) from e
 
             else:
                 raise KeyError(f'Expected node {node.name} to be in context!')
-
         return ctxt
 
     # Don't override - binds the layer to a node
@@ -3813,15 +3665,13 @@ class NetworkDeployer(NetworkContainer):
         hmac_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         # nonce = "000000000000000000000000CACACACA"
 
-        print("Setting up encryptor")
+        #print("Setting up encryptor")
 
-        encryptor = ONNXEncryptor(key,hmac_key)
+        #print("Encrypting network")
 
-        print("Encrypting network")
+        self.graph = ENCRYPTOR.process_graph(self.graph)
 
-        self.graph = encryptor.process_graph(self.graph)
-
-        print("Network encrypted")
+        #print("Network encrypted")
 
         log.info(f"> Export State {_middlewarePostLoweringFilename}[.onnx|.pkl]")
         self.exportDeeployState(self.deeployStateDir, _middlewarePostLoweringFilename)
