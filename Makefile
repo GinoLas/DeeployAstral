@@ -5,6 +5,10 @@
 SHELL = /usr/bin/env bash
 ROOT_DIR := $(patsubst %/,%, $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 
+REMOTE_COMP_DIR 	?= /home/benassi/qyolo_graph_cluster_pulp_nn/network/
+REMOTE_COMP_USER	?= benassi
+REMOTE_COMP_SERVER	?= arrakis.polito.it
+
 INSTALL_PREFIX        ?= install
 
 DEEPLOY_INSTALL_DIR           ?= ${ROOT_DIR}/${INSTALL_PREFIX}
@@ -592,3 +596,13 @@ docs:
 
 clean-docs:
 	rm -rf docs/_autosummary docs/_build
+
+.PHONY: ncp 
+
+ncp:
+	@echo "Copying ${net} artifacts..."
+	scp DeeployTest/TEST_SIRACUSA/Tests/Models/${net}/*.c DeeployTest/TEST_SIRACUSA/Tests/Models/${net}/*.h ${REMOTE_COMP_USER}@${REMOTE_COMP_SERVER}:${REMOTE_COMP_DIR}
+
+
+
+

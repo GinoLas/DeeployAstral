@@ -119,11 +119,12 @@ def generateTestNetworkHeader(deployer: NetworkDeployer) -> str:
     retStr += """
     #ifndef __DEEPLOY_HEADER__
     #define __DEEPLOY_HEADER__
+    #include "DeeployPULPMath.h"
     #include <stdio.h>
     #include <stdint.h>
     #include <stdlib.h>
     """
-    retStr += deployer.generateIncludeString()
+    #retStr += deployer.generateIncludeString()
     if isinstance(deployer.Platform, (PULPPlatform, MemoryPULPPlatform, MemoryPULPPlatformWrapper)):
         retStr += """
         void RunNetwork();
@@ -148,16 +149,30 @@ def generateTestNetworkHeader(deployer: NetworkDeployer) -> str:
 def generateTestNetworkImplementation(deployer: NetworkDeployer, verbosityCfg: CodeGenVerbosity) -> str:
     retStr = ""
 
-    retStr += """#include <stdio.h>
+    retStr += """
+    #include "DeeployPULPMath.h"
+    #include <stdio.h>
     #include <stdlib.h>
     #include <math.h>
     """
-    retStr += deployer.generateIncludeString()
+    #retStr += deployer.generateIncludeString()
+    retStr += """ 
+            #include "pmsis.h"
+            #include "mbox.h"
+            #include "debug_utils.h"
+    """
+    
     retStr += """
 
     #include "Network.h"
 
     """
+
+    retStr += """
+    memory_transfer_operation_altered_t cl_task;
+    """
+    print("DEBUGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG generateTestNetworkImplementation")
+    print(retStr)
 
 
 

@@ -51,7 +51,9 @@ pi_cluster_send_task_to_cl(&cluster_dev, &cluster_task);
 """)
 
 _clusterForkClosureCallTemplate = NodeTemplate("""
+// TIMER_START
 pi_cl_team_fork(NUM_CORES, (void*)${closureName}, &${closureStructArgName});
+// TIMER_STOP_FORK("${closureName}", TILING_I)
 """)
 
 SkipTransformer = CodeTransformation(
