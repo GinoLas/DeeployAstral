@@ -46,9 +46,8 @@ class MchanDma(AsyncDma):
         1: NodeTemplate("""
                         //sha256 = ${sha256}
                         //bufferHash = ${bufferHash}
-                        //local_id = ${local_id}
                         //external_id = ${external_id}
-                        cl_task.transfer_id = 0x${sha256};
+                        cl_task.transfer_id = ${external_id};
                         cl_task.size = ${size};
                         cl_task.src = ${loc};
                         cl_task.dst = ${ext};
@@ -60,10 +59,9 @@ class MchanDma(AsyncDma):
                         //sha256 = ${sha256}
                         //bufferHash = ${bufferHash}
                         //${size_1d}
-                        //local_id = ${local_id}
                         //external_id = ${external_id}
                         //cl_task.bufferHash = 0x${bufferHash};
-                        cl_task.transfer_id = 0x${sha256};
+                        cl_task.transfer_id = ${external_id};
                         cl_task.size = ${size};
                         cl_task.src = ${loc};
                         cl_task.dst = ${ext};
@@ -196,8 +194,8 @@ class MchanDma(AsyncDma):
             # print(operatorRepresentation["sha256"]+ "-->" + " input/output")
 
 
-        operatorRepresentation["external_id"] = ctxt.lookup(externalBuffer._referenceName).id
-        operatorRepresentation["local_id"] = ctxt.lookup(localBuffer._referenceName).id
+        operatorRepresentation["external_id"] = ctxt.lookup(
+            ctxt.dealiasBuffer(externalBuffer._referenceName)).id
 
 
 

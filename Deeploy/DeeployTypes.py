@@ -748,7 +748,8 @@ class NetworkContext():
         if _id != "":
             obj.name = self._mangle(_id + "_" + obj.name, False)
 
-        obj.id = self.tensor_id 
+        
+        obj.id = self.tensor_id
         self.tensor_id = self.tensor_id+1
 
         if ctxt == 'local':
