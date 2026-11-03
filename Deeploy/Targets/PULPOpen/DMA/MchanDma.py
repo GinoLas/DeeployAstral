@@ -194,8 +194,9 @@ class MchanDma(AsyncDma):
             # print(operatorRepresentation["sha256"]+ "-->" + " input/output")
 
 
-        operatorRepresentation["external_id"] = ctxt.lookup(
-            ctxt.dealiasBuffer(externalBuffer._referenceName)).id
+        ext_root = ctxt.unravelReference(externalBuffer)               # segue i _ReferenceBuffer fino al buffer vero
+        root_name = ctxt.dealiasBuffer(ext_root.name)                  # poi risolve gli alias (Reshape/Flatten)
+        operatorRepresentation["external_id"] = ctxt.lookup(root_name).id
 
 
 
