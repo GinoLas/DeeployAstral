@@ -3248,6 +3248,9 @@ class NetworkContainer():
             return ""
 
         for a in hmacAssociations:
+
+                root_name = self.ctxt.dealiasBuffer(a.buffer)                  # poi risolve gli alias (Reshape/Flatten)
+                transfer_id = self.ctxt.lookup(root_name).id
                 
                 ret += f"""
                         //Signature verification for DeeployNetwork_{a.buffer}
@@ -3259,6 +3262,7 @@ class NetworkContainer():
                         wait_for_idma_transfer();
 
                         //IV binding for DeeployNetwork_{a.buffer}
+                        cl_task.transfer_id = {transfer_id};
                         cl_task.src = DeeployNetwork_{a.buffer};
                         cl_task.dst = DeeployNetwork_{a.iv};
                         cl_task.size = 0;
