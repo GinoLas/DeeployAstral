@@ -1497,7 +1497,8 @@ class NodeTypeChecker():
         constant_inputs = list(filter(lambda x : isinstance(x,gs.Constant),node.inputs))
         for input in constant_inputs:
             ctxt_input = ctxt.lookup(input.name)
-            ctxt.addHmacAssociation(ctxt_input.name,f"{ctxt_input.name}_hmac",f"{ctxt_input.name}_iv",math.prod(input.shape) * ctxt_input._type.referencedType.typeWidth//8)
+            # forma dal contesto, non dal nodo gs: dopo un broadcast è quella del buffer emesso
+            ctxt.addHmacAssociation(ctxt_input.name,f"{ctxt_input.name}_hmac",f"{ctxt_input.name}_iv",math.prod(ctxt_input.shape) * ctxt_input._type.referencedType.typeWidth//8)
         return ctxt
 
 
@@ -2057,6 +2058,11 @@ class ONNXLayer():
                                 # costante cifrata: decifra, espandi il chiaro, ricifra tutto
                                 iv = ctxt.globalObjects[iv_name].values.tobytes()
                                 const.values = ENCRYPTOR.broadcast_encrypted(const.values, iv, newShape)
+                                # il cifrato è cambiato: ricalcola l'HMAC su IV || nuovo cifrato
+                                hmac_name = f"{node.name}_hmac"
+                                if hmac_name in ctxt.globalObjects:
+                                    digest = ENCRYPTOR._compute_hmac(iv, const.values)
+                                    ctxt.globalObjects[hmac_name].values = np.frombuffer(digest, dtype=np.uint32).copy()
                             else:
                                 const.values = np.broadcast_to(const.values, newShape)
                         except Exception as e:
@@ -3249,24 +3255,27 @@ class NetworkContainer():
 
         for a in hmacAssociations:
 
-                root_name = self.ctxt.dealiasBuffer(a.buffer)                  # poi risolve gli alias (Reshape/Flatten)
-                transfer_id = self.ctxt.lookup(root_name).id
-                
-                ret += f"""
-                        //Signature verification for DeeployNetwork_{a.buffer}
-                        cl_task.src = DeeployNetwork_{a.buffer};
-                        cl_task.dst = DeeployNetwork_{a.hmac};
-                        cl_task.size = {a.size};
-                        mailbox_send(1,&cl_task, 64);
-                        mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
-                        wait_for_idma_transfer();
+                # Stesso id dei trasferimenti DMA (MchanDma): è la chiave della hashmap su OT
+                buf_root = self.ctxt.unravelReference(self.ctxt.lookup(a.buffer))   # segue i _ReferenceBuffer
+                buf_id = self.ctxt.lookup(self.ctxt.dealiasBuffer(buf_root.name)).id  # poi risolve gli alias
 
+                # Prima l'IV, poi l'HMAC: l'HMAC è calcolato su IV || pesi cifrati
+                ret += f"""
                         //IV binding for DeeployNetwork_{a.buffer}
-                        cl_task.transfer_id = {transfer_id};
+                        cl_task.transfer_id = {buf_id};
                         cl_task.src = DeeployNetwork_{a.buffer};
                         cl_task.dst = DeeployNetwork_{a.iv};
                         cl_task.size = 0;
                         mailbox_send(1,&cl_task, 256);
+                        mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
+                        wait_for_idma_transfer();
+
+                        //Signature verification for DeeployNetwork_{a.buffer}
+                        cl_task.transfer_id = {buf_id};
+                        cl_task.src = DeeployNetwork_{a.buffer};
+                        cl_task.dst = DeeployNetwork_{a.hmac};
+                        cl_task.size = {a.size};
+                        mailbox_send(1,&cl_task, 64);
                         mb_write(0x1, MBOX_CAR_INT_SND_SET(1));
                         wait_for_idma_transfer();
                         """

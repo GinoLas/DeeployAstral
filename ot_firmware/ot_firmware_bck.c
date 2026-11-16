@@ -71,9 +71,38 @@
 //     con aes_fast_iv_test.c); 0 = aes_init completo a ogni segmento (lento, sicuro).
 #define AES_FAST_IV            1
 
+// Solo con AES_FAST_IV = 1. 1 = se cambia la chiave (pesi <-> attivazioni, o pesi di un altro
+//     tensore) il motore, gia' configurato, riceve solo chiave + IV (aes_init_lite) invece di un
+//     aes_init completo; 0 = ogni cambio di chiave fa un aes_init completo. Utile per isolare
+//     un problema sul SoC: se con 0 funziona e con 1 no, il colpevole e' aes_init_lite.
+#define AES_LITE_INIT          1
+
+// Budget della TCDM accessibile al DMA: 32 KiB logici (vista lineare del DMA).
+// La vista del core Ibex ha uno stride di 4 per parola: vedi TCDM_WORD sotto.
+#define TCDM_BUFFER_BYTES      (32u * 1024u)
+
+// 0 = percorso storico: DMA-in dell'intero segmento, AES, DMA-out (richiede che
+//     la finestra AES del segmento stia in TCDM_BUFFER_BYTES).
+// 1 = streaming SEQUENZIALE su un solo buffer: DMA-in, AES, DMA-out, ripetuti
+//     fino a completamento. Un solo aes_start() per segmento, non per chunk.
+#define PIPE_DMA               1
+// Massima porzione di finestra AES per iterazione (multiplo di 16).
+// 32768 sfrutta tutti i 32 KiB; es. 30720 lascia un margine di 2 KiB.
+#define PIPE_CHUNK_BYTES       TCDM_BUFFER_BYTES
+
 // 1 = misura i cicli (mcycle) per funzione e stampa un riepilogo alla fine della rete.
 //     Ogni misura costa qualche decina di cicli: il riepilogo riporta l'overhead stimato.
 #define OT_PROFILE             0
+
+// 1 = firmware completo: AES-CTR, HMAC, hashmap dei pesi, chiave/IV delle attivazioni.
+// 0 = OpenTitan fa solo da broker dati: ogni trasferimento (anche quelli marcati SECURE_MASK) e'
+//     una semplice copia DMA, e INIT / HMAC / IV vengono solo riconosciuti (il cluster viene
+//     avvisato come prima) senza toccare AES, HMAC, entropia o hashmap.
+//     Servono dati in chiaro in memoria: pesi e tensori non devono essere stati cifrati a monte.
+//     Si puo' passare da riga di comando: -DOT_SECURE_ENABLE=0
+#ifndef OT_SECURE_ENABLE
+#define OT_SECURE_ENABLE       1
+#endif
 
 #define OT_DEBUG 0                           // 1 = stampe di debug
 #define DBG(...) do { if (OT_DEBUG) printf(__VA_ARGS__); } while (0)
@@ -133,8 +162,9 @@ typedef enum {
   PROF_WEIGHTS_CTX,     // hashmap per i pesi
   PROF_CRYPT_SEGMENT,   // un segmento (una riga)
   PROF_ADD_IV,          // add_u128_leword_visual
-  PROF_AES_START,       // aes_start (scelta tra init completo e solo IV)
+  PROF_AES_START,       // aes_start (scelta tra init completo, lite e solo IV)
   PROF_AES_INIT,        // aes_init completo
+  PROF_AES_INIT_LITE,   // solo chiave + IV, motore gia' configurato
   PROF_ENTROPY_INIT,    // utils_entropy_init, dentro aes_init
   PROF_AES_SET_IV,      // solo riscrittura IV
   PROF_DMA_IN,          // DMA dentro la finestra
@@ -164,6 +194,7 @@ static const char *const prof_names[PROF_COUNT] = {
   "add_u128 (contatore)",
   "aes_start",
   "aes_init completo",
+  "aes_init_lite (chiave + IV)",
   "utils_entropy_init",
   "aes_set_iv",
   "dma dentro la finestra",
@@ -365,38 +396,58 @@ static void prof_report(void) {
 #endif
 
 // =====================================================================
-// Motore AES (invariato rispetto al firmware originale)
+// SEZIONE R - Accesso diretto ai registri AES
 // =====================================================================
 
-uint32_t _aes_get_keyreg(uint32_t idx){
-    uint32_t reg_offset[8*2] = {
-        AES_KEY_SHARE0_0_REG_OFFSET, AES_KEY_SHARE0_1_REG_OFFSET,
-        AES_KEY_SHARE0_2_REG_OFFSET, AES_KEY_SHARE0_3_REG_OFFSET,
-        AES_KEY_SHARE0_4_REG_OFFSET, AES_KEY_SHARE0_5_REG_OFFSET,
-        AES_KEY_SHARE0_6_REG_OFFSET, AES_KEY_SHARE0_7_REG_OFFSET,
-        AES_KEY_SHARE1_0_REG_OFFSET, AES_KEY_SHARE1_1_REG_OFFSET,
-        AES_KEY_SHARE1_2_REG_OFFSET, AES_KEY_SHARE1_3_REG_OFFSET,
-        AES_KEY_SHARE1_4_REG_OFFSET, AES_KEY_SHARE1_5_REG_OFFSET,
-        AES_KEY_SHARE1_6_REG_OFFSET, AES_KEY_SHARE1_7_REG_OFFSET
-    };
-    return reg_offset[idx];
-}
+// mmio_region_write32/read32 e le tabelle _aes_get_*reg() costano una chiamata (e per le tabelle
+// anche la costruzione di un array sullo stack) a ogni accesso. Qui i registri sono raggiunti con
+// un normale accesso volatile a TOP_EARLGREY_AES_BASE_ADDR + offset, con l'offset dato per nome:
+// il compilatore lo riduce a una load/store con immediato.
+//
+// Il test su PC definisce prima AES_REG_WR / AES_REG_RD per collegare un modello software del
+// motore; sul SoC valgono queste definizioni.
+#ifndef AES_REG_WR
+#define AES_REG_PTR(offset)       ((volatile uint32_t *)((uintptr_t) TOP_EARLGREY_AES_BASE_ADDR + (uintptr_t) (offset)))
+#define AES_REG_WR(offset, value) (*AES_REG_PTR(offset) = (uint32_t) (value))
+#define AES_REG_RD(offset)        (*AES_REG_PTR(offset))
+#endif
 
-uint32_t _aes_get_ivreg(uint32_t idx){
-    uint32_t reg_offset[4] = {
-        AES_IV_0_REG_OFFSET, AES_IV_1_REG_OFFSET,
-        AES_IV_2_REG_OFFSET, AES_IV_3_REG_OFFSET
-    };
-    return reg_offset[idx];
-}
+// Lettura diretta di STATUS e attese attive su un suo bit.
+#define AES_STATUS_BIT_SET(bit)   ((AES_REG_RD(AES_STATUS_REG_OFFSET) & (UINT32_C(1) << (bit))) != 0)
+#define AES_WAIT_IDLE()           do { while (!AES_STATUS_BIT_SET(AES_STATUS_IDLE_BIT)) {} } while (0)
+#define AES_WAIT_OUTPUT_VALID()   do { while (!AES_STATUS_BIT_SET(AES_STATUS_OUTPUT_VALID_BIT)) {} } while (0)
 
-uint32_t _aes_get_datainreg(uint32_t idx){
-    uint32_t reg_offset[4] = {
-        AES_DATA_IN_0_REG_OFFSET, AES_DATA_IN_1_REG_OFFSET,
-        AES_DATA_IN_2_REG_OFFSET, AES_DATA_IN_3_REG_OFFSET
-    };
-    return reg_offset[idx];
-}
+// Chiave a 256 bit: share0 = chiave, share1 = 0 (nessun mascheramento). `key` punta a 8 parole.
+#define AES_WRITE_KEY(key) do {                                              \
+    AES_REG_WR(AES_KEY_SHARE0_0_REG_OFFSET, (key)[0]);                       \
+    AES_REG_WR(AES_KEY_SHARE0_1_REG_OFFSET, (key)[1]);                       \
+    AES_REG_WR(AES_KEY_SHARE0_2_REG_OFFSET, (key)[2]);                       \
+    AES_REG_WR(AES_KEY_SHARE0_3_REG_OFFSET, (key)[3]);                       \
+    AES_REG_WR(AES_KEY_SHARE0_4_REG_OFFSET, (key)[4]);                       \
+    AES_REG_WR(AES_KEY_SHARE0_5_REG_OFFSET, (key)[5]);                       \
+    AES_REG_WR(AES_KEY_SHARE0_6_REG_OFFSET, (key)[6]);                       \
+    AES_REG_WR(AES_KEY_SHARE0_7_REG_OFFSET, (key)[7]);                       \
+    AES_REG_WR(AES_KEY_SHARE1_0_REG_OFFSET, 0);                              \
+    AES_REG_WR(AES_KEY_SHARE1_1_REG_OFFSET, 0);                              \
+    AES_REG_WR(AES_KEY_SHARE1_2_REG_OFFSET, 0);                              \
+    AES_REG_WR(AES_KEY_SHARE1_3_REG_OFFSET, 0);                              \
+    AES_REG_WR(AES_KEY_SHARE1_4_REG_OFFSET, 0);                              \
+    AES_REG_WR(AES_KEY_SHARE1_5_REG_OFFSET, 0);                              \
+    AES_REG_WR(AES_KEY_SHARE1_6_REG_OFFSET, 0);                              \
+    AES_REG_WR(AES_KEY_SHARE1_7_REG_OFFSET, 0);                              \
+  } while (0)
+
+// Contatore iniziale (128 bit): `iv` punta a 4 parole.
+#define AES_WRITE_IV(iv) do {                                                \
+    AES_REG_WR(AES_IV_0_REG_OFFSET, (iv)[0]);                                \
+    AES_REG_WR(AES_IV_1_REG_OFFSET, (iv)[1]);                                \
+    AES_REG_WR(AES_IV_2_REG_OFFSET, (iv)[2]);                                \
+    AES_REG_WR(AES_IV_3_REG_OFFSET, (iv)[3]);                                \
+  } while (0)
+
+// =====================================================================
+// SEZIONE M - Motore AES: configurazione completa
+// =====================================================================
 
 // Configura il motore in CTR/256 bit con chiave e IV dati. Il contatore parte da `aes_iv`
 // e avanza di 1 per ogni blocco elaborato.
@@ -449,19 +500,14 @@ void aes_init(uint32_t* aes_iv, uint32_t *aes_key) {
   mmio_region_write32(aes, AES_CTRL_AUX_SHADOWED_REG_OFFSET, reg);
   mmio_region_write32(aes, AES_CTRL_AUX_REGWEN_REG_OFFSET, true);
 
-  // Initialize key shares
-  for (size_t i = 0; i < 8; i++) {
-    mmio_region_write32(aes, _aes_get_keyreg(i), aes_key[i]);       // SHARE0 = key
-    mmio_region_write32(aes, _aes_get_keyreg(i + 8), 0x00000000);   // SHARE1 = 0
-  }
+  // Initialize key shares (SHARE0 = key, SHARE1 = 0)
+  AES_WRITE_KEY(aes_key);
 
   reg = mmio_region_read32(aes, AES_CTRL_SHADOWED_REG_OFFSET);
   reg = bitfield_field32_read(reg, AES_CTRL_SHADOWED_MODE_FIELD);
   if (reg != AES_CTRL_SHADOWED_MODE_VALUE_AES_ECB) {
-      while(!mmio_region_get_bit32(aes, AES_STATUS_REG_OFFSET, AES_STATUS_IDLE_BIT));
-      for (size_t i = 0; i < 4; i++) {
-          mmio_region_write32(aes, _aes_get_ivreg(i), aes_iv[i]);
-      }
+      AES_WAIT_IDLE();
+      AES_WRITE_IV(aes_iv);
   }
 }
 
@@ -582,15 +628,16 @@ void utils_csrng_randgen(titanssl_batch_t *dat, uint32_t words) {
 }
 
 // =====================================================================
-// SEZIONE A0 - Cache del motore AES: reinizializzazione completa solo se cambia la chiave
+// SEZIONE A0 - Cache del motore AES: init completo solo la prima volta, poi lite o solo IV
 // =====================================================================
 
-// aes_init() e' costosa (entropia, reset, configurazione, chiave, IV). Tra due segmenti con la
-// stessa chiave basta riscrivere i 4 registri dell'IV a motore idle: il contatore riparte da li'.
+// aes_init() e' costosa (entropia, reset, configurazione, chiave, IV). Una volta configurato il
+// motore: tra due segmenti con la stessa chiave basta riscrivere i 4 registri dell'IV a motore
+// idle (il contatore riparte da li'); con una chiave diversa bastano chiave + IV (aes_init_lite).
 static bool     aes_ready = false;      // il motore e' configurato con aes_cached_key
 static uint32_t aes_cached_key[8];
 
-// Da chiamare quando qualcosa puo' aver toccato il motore (INIT, fine rete):
+// Da chiamare quando qualcosa puo' aver toccato il motore (INIT, fine rete); all'avvio vale gia' false:
 // il prossimo segmento fara' un aes_init completo.
 static void aes_invalidate(void) {
   aes_ready = false;
@@ -599,21 +646,40 @@ static void aes_invalidate(void) {
 // Riposiziona solo il contatore. Il motore deve essere idle ed essere gia' configurato
 // con la chiave giusta.
 static void aes_set_iv(const uint32_t *iv) {
-  mmio_region_t aes = mmio_region_from_addr(TOP_EARLGREY_AES_BASE_ADDR);
-  while (!mmio_region_get_bit32(aes, AES_STATUS_REG_OFFSET, AES_STATUS_IDLE_BIT));
-  for (int i = 0; i < 4; i++)
-    mmio_region_write32(aes, _aes_get_ivreg(i), iv[i]);
+  AES_WAIT_IDLE();
+  AES_WRITE_IV(iv);
 }
 
-// Prepara il motore con chiave e contatore iniziale `iv`.
+// Cambia chiave e contatore su un motore gia' configurato (CTR, 256 bit, cifratura, nessun
+// mascheramento): niente entropia, reset o riscrittura di CTRL, solo share0 = chiave,
+// share1 = 0, e poi l'IV. Ammesso solo se aes_ready, cioe' se un aes_init completo e' gia' stato
+// fatto dopo l'ultimo aes_invalidate().
+static void aes_init_lite(const uint32_t *iv, const uint32_t *key) {
+  AES_WAIT_IDLE();
+  AES_WRITE_KEY(key);
+  AES_WAIT_IDLE();               // la scrittura della chiave rende il motore non idle per un po'
+  AES_WRITE_IV(iv);
+}
+
+// Prepara il motore con chiave e contatore iniziale `iv`:
+//   motore non configurato (avvio, dopo INIT o fine rete)        -> aes_init completo
+//   chiave diversa dall'ultima                                    -> aes_init_lite
+//   stessa chiave                                                 -> solo l'IV (aes_set_iv)
 static void aes_start(uint32_t *iv, uint32_t *key) {
 #if AES_FAST_IV
-  if (aes_ready && memcmp(aes_cached_key, key, sizeof(aes_cached_key)) == 0) {
-    PROF_CALL(PROF_AES_SET_IV, aes_set_iv(iv));   // stessa chiave: basta l'IV
+  if (aes_ready) {
+    if (memcmp(aes_cached_key, key, sizeof(aes_cached_key)) == 0) {
+      PROF_CALL(PROF_AES_SET_IV, aes_set_iv(iv));
+      return;
+    }
+#if AES_LITE_INIT
+    PROF_CALL(PROF_AES_INIT_LITE, aes_init_lite(iv, key));
+    memcpy(aes_cached_key, key, sizeof(aes_cached_key));
     return;
+#endif
   }
 #endif
-  PROF_CALL(PROF_AES_INIT, aes_init(iv, key));   // chiave nuova o motore da riconfigurare
+  PROF_CALL(PROF_AES_INIT, aes_init(iv, key));   // motore da configurare (o AES_FAST_IV = 0)
   memcpy(aes_cached_key, key, sizeof(aes_cached_key));
   aes_ready = true;
 }
@@ -645,24 +711,14 @@ static void act_ctx_init(const uint32_t *words) {
 
 // Se `t` e' un tensore di pesi (noto alla hashmap), riempie il contesto e ritorna true.
 // Altrimenti ritorna false senza toccare niente, e il trasferimento e' un'attivazione.
-//   * tile successivi: il transfer_id e' gia' associato alla base del tensore
-//   * primo tile: `src` e' la base annunciata con IV_MASK (si assume offset 0, come nel firmware
-//     originale) e il transfer_id viene associato a quella base
 static bool weights_ctx(const memory_transfer_operation_altered_t *t, crypto_ctx_t *ctx) {
   static uint32_t unused_iv[4];
   uint32_t tensor_base;
 
-  if (hashmap_get_random((uint32_t) t->transfer_id, &tensor_base, unused_iv, NULL) == HM_FALSE) {
-    if (hashmap_get_random((uint32_t) t->src, &tensor_base, unused_iv, NULL) == HM_FALSE)
-      return false;
-    hashmap_push_random((uint32_t) t->transfer_id, tensor_base, unused_iv, NULL);
-  }
-
-  uint32_t base;
-  if (hashmap_get_random(tensor_base, &base, ctx->iv, ctx->key) == HM_FALSE)
+  // uint32_t base;
+  if (hashmap_get_random(t->transfer_id,&(ctx->base), ctx->iv, ctx->key) == HM_FALSE)
     return false;
 
-  ctx->base = base;
   return true;
 }
 
@@ -684,50 +740,189 @@ static void dma_copy(uint32_t src, uint32_t dst, uint32_t size) {
   PROF_END(PROF_DMA_WAIT);
 }
 
-// Cifra/decifra `nbytes` (multiplo di 16) a partire da TCDM_BASE, sul posto.
-// Il motore e' gia' stato inizializzato: il contatore avanza da solo di 1 per blocco.
-static void aes_ctr_in_place(uint32_t nbytes) {
-  mmio_region_t aes = mmio_region_from_addr(TOP_EARLGREY_AES_BASE_ADDR);
+// Cifra/decifra `nbytes` (multiplo di 16) sul posto, a partire dalla parola logica `wbase` della TCDM
+// (wbase = 0 e' TCDM_BASE). Il motore e' gia' stato inizializzato: il contatore avanza da solo di 1
+// per blocco, quindi chunk consecutivi dello stesso segmento si concatenano senza riscrivere l'IV.
+// Registri raggiunti per nome con AES_REG_WR/AES_REG_RD (sezione R): 4 store, 1 attesa su
+// STATUS, 4 load per blocco, senza chiamate a funzione.
+// static void aes_ctr_in_place(uint32_t wbase, uint32_t nbytes) {
+//   // Lettura di servizio ereditata dal firmware originale (tcdm[j + count]).
+//   // Non rimuovere finche' non verificato sul TCDM.
+//   #define AES_OUT_WORD(j, reg)                                                       \
+//     do {                                                                             \
+//       TCDM_WORD(wbase + w + (j)) = AES_REG_RD(reg);                                  \
+//       volatile uint32_t sink = ((volatile uint32_t *) TCDM_BASE)[wbase + w + (j)];   \
+//       (void) sink;                                                                   \
+//     } while (0)
 
-  // Ciclo su 4 word alla volta
+//   // Ciclo su 4 word (un blocco) alla volta
+//   for (uint32_t w = 0; w < nbytes / 4; w += 4) {
+//     AES_REG_WR(AES_DATA_IN_0_REG_OFFSET, TCDM_WORD(wbase + w + 0));
+//     AES_REG_WR(AES_DATA_IN_1_REG_OFFSET, TCDM_WORD(wbase + w + 1));
+//     AES_REG_WR(AES_DATA_IN_2_REG_OFFSET, TCDM_WORD(wbase + w + 2));
+//     AES_REG_WR(AES_DATA_IN_3_REG_OFFSET, TCDM_WORD(wbase + w + 3));
+
+//     PROF_BEGIN(PROF_AES_WAIT);
+//     AES_WAIT_OUTPUT_VALID();
+//     PROF_END(PROF_AES_WAIT);
+
+//     AES_OUT_WORD(0, AES_DATA_OUT_0_REG_OFFSET);
+//     AES_OUT_WORD(1, AES_DATA_OUT_1_REG_OFFSET);
+//     AES_OUT_WORD(2, AES_DATA_OUT_2_REG_OFFSET);
+//     AES_OUT_WORD(3, AES_DATA_OUT_3_REG_OFFSET);
+//   }
+//   #undef AES_OUT_WORD
+// }
+
+static void aes_ctr_in_place(uint32_t wbase, uint32_t nbytes) {
+  // Lettura di servizio ereditata dal firmware originale (tcdm[j + count]).
+  // Non rimuovere finche' non verificato sul TCDM.
+
+  volatile uint32_t* aes_regs =  (uint32_t *) 0xC1100054;
+  volatile uint32_t* aes_regs_out =  (uint32_t *) 0xC1100064;
+  volatile uint32_t* tcdm = (uint32_t *) 0xfff00000;
+  volatile uint32_t cur;
+
+
+  // #define AES_OUT_WORD(j, reg)                                                       \
+  //   do {                                                                             \
+  //     TCDM_WORD(wbase + w + (j)) = AES_REG_RD(reg);                                  \
+  //     volatile uint32_t sink = ((volatile uint32_t *) TCDM_BASE)[wbase + w + (j)];   \
+  //     (void) sink;                                                                   \
+  //   } while (0)
+
+  // Ciclo su 4 word (un blocco) alla volta
   for (uint32_t w = 0; w < nbytes / 4; w += 4) {
-    for (int j = 0; j < 4; j++)
-      // Le carico 4 per ogni ciclo interno nel motore AES
-      mmio_region_write32(aes, _aes_get_datainreg(j), TCDM_WORD(w + j));
+    // AES_REG_WR(AES_DATA_IN_0_REG_OFFSET, TCDM_WORD(wbase + w + 0));
+    // AES_REG_WR(AES_DATA_IN_1_REG_OFFSET, TCDM_WORD(wbase + w + 1));
+    // AES_REG_WR(AES_DATA_IN_2_REG_OFFSET, TCDM_WORD(wbase + w + 2));
+    // AES_REG_WR(AES_DATA_IN_3_REG_OFFSET, TCDM_WORD(wbase + w + 3));
+
+    // PROF_BEGIN(PROF_AES_WAIT);
+    // AES_WAIT_OUTPUT_VALID();
+    // PROF_END(PROF_AES_WAIT);
+
+    // AES_OUT_WORD(0, AES_DATA_OUT_0_REG_OFFSET);
+    // AES_OUT_WORD(1, AES_DATA_OUT_1_REG_OFFSET);
+    // AES_OUT_WORD(2, AES_DATA_OUT_2_REG_OFFSET);
+    // AES_OUT_WORD(3, AES_DATA_OUT_3_REG_OFFSET);
+
+    aes_regs[0] = tcdm[(wbase + w)*4];
+    aes_regs[1] = tcdm[(wbase + w+1)*4];
+    aes_regs[2] = tcdm[(wbase + w+2)*4];
+    aes_regs[3] = tcdm[(wbase + w+3)*4];
+
 
     PROF_BEGIN(PROF_AES_WAIT);
-    while (!mmio_region_get_bit32(aes, AES_STATUS_REG_OFFSET, AES_STATUS_OUTPUT_VALID_BIT));
+    //while(!mmio_region_get_bit32(aes, AES_STATUS_REG_OFFSET, AES_STATUS_OUTPUT_VALID_BIT));
+    while ((*(volatile uint32_t *)((uintptr_t)TOP_EARLGREY_AES_BASE_ADDR + AES_STATUS_REG_OFFSET) 
+                                                  & (UINT32_C(1) << AES_STATUS_OUTPUT_VALID_BIT)) == 0) {}
     PROF_END(PROF_AES_WAIT);
 
-    for (int j = 0; j < 4; j++) {
-      TCDM_WORD(w + j) = mmio_region_read32(aes, AES_DATA_OUT_0_REG_OFFSET + j * 4);
+    tcdm[(wbase + w)*4] = aes_regs_out[0];// mmio_region_read32(aes, AES_DATA_OUT_0_REG_OFFSET);         //Transfer output in local memory
+    tcdm[(1 + wbase + w)*4] = aes_regs_out[1];//mmio_region_read32(aes, AES_DATA_OUT_1_REG_OFFSET);         //Transfer output in local memory
+    tcdm[(2 + wbase + w)*4] = aes_regs_out[2];//mmio_region_read32(aes, AES_DATA_OUT_2_REG_OFFSET);         //Transfer output in local memory
+    tcdm[(3 + wbase + w)*4] = aes_regs_out[3];
 
-      // Lettura di servizio ereditata dal firmware originale (tcdm[j + count]).
-      // Non rimuovere finche' non verificato sul TCDM.
-      volatile uint32_t sink = ((volatile uint32_t *) TCDM_BASE)[w + j];
-      (void) sink;
+    cur = tcdm[(wbase + w)*4]; // => MAGIC READ
+    cur = tcdm[(wbase + w+1)*4]; // => MAGIC READ
+    cur = tcdm[(wbase + w+2)*4]; // => MAGIC READ
+    cur = tcdm[(wbase + w+3)*4]; // => MAGIC READ
+  }
+  // #undef AES_OUT_WORD
+}
+
+
+
+
+
+#if PIPE_DMA
+
+// ---- Streaming in un unico buffer TCDM ----------------------------------
+// `head` e' la posizione del primo byte utile rispetto al blocco AES iniziale.
+// La finestra [0, nbytes) e' allineata a blocchi da 16 byte; si tratta un
+// chunk alla volta, sempre caricandolo da TCDM_BASE (nessun buffer circolare).
+// In ogni chunk:
+//   1) DMA-in dei SOLI byte utili, all'offset corretto nella finestra;
+//   2) AES-CTR di tutti i blocchi del chunk (gli altri byte sono ignorati);
+//   3) DMA-out dei SOLI byte utili, attendendone il completamento.
+// AES non viene riconfigurato tra chunk: il CTR hardware avanza da solo.
+// La singola notifica EU avviene piu' in alto, dopo secure_transfer().
+#if (PIPE_CHUNK_BYTES < 16u) || ((PIPE_CHUNK_BYTES % 16u) != 0u) || \
+    (PIPE_CHUNK_BYTES > TCDM_BUFFER_BYTES)
+#error "PIPE_CHUNK_BYTES deve essere un multiplo di 16 compreso tra 16 e 32768"
+#endif
+
+static inline uint32_t pipe_min(uint32_t a, uint32_t b) {
+  return a < b ? a : b;
+}
+
+static inline uint32_t pipe_max(uint32_t a, uint32_t b) {
+  return a > b ? a : b;
+}
+
+static void crypt_chunked(uint32_t src, uint32_t dst, uint32_t size,
+                          uint32_t head, uint32_t nbytes,
+                          uint32_t *iv, uint32_t *key) {
+  const uint32_t data_end = head + size;  // verifica overflow in crypt_segment()
+
+  for (uint32_t lo = 0; lo < nbytes; ) {
+    // Non sommare PIPE_CHUNK_BYTES a lo senza controllare: evita overflow.
+    const uint32_t chunk_bytes = pipe_min(PIPE_CHUNK_BYTES, nbytes - lo);
+    const uint32_t hi = lo + chunk_bytes;
+    const uint32_t useful_begin = pipe_max(lo, head);
+    const uint32_t useful_end = pipe_min(hi, data_end);
+    const uint32_t useful_bytes = useful_end - useful_begin;
+    const uint32_t buffer_offset = useful_begin - lo;
+    const uint32_t transfer_offset = useful_begin - head;
+
+    // DMA e AES non lavorano mai contemporaneamente sul medesimo buffer.
+    PROF_CALL(PROF_DMA_IN,
+              dma_copy(src + transfer_offset,
+                       (uint32_t) TCDM_BASE + buffer_offset,
+                       useful_bytes));
+
+    // Solo al primo chunk si caricano chiave e IV; poi il CTR e' continuo.
+    if (lo == 0) {
+      PROF_CALL(PROF_AES_START, aes_start(iv, key));
     }
+    PROF_CALL(PROF_AES_LOOP, aes_ctr_in_place(0, chunk_bytes));
+
+    PROF_CALL(PROF_DMA_OUT,
+              dma_copy((uint32_t) TCDM_BASE + buffer_offset,
+                       dst + transfer_offset,
+                       useful_bytes));
+    lo = hi;
   }
 }
+
+#endif  // PIPE_DMA
 
 // Trasferisce `size` byte da `src` a `dst` cifrandoli o decifrandoli.
 // Uno dei due indirizzi sta in L2 (src se si decifra, dst se si cifra) e decide il contatore.
 static void crypt_segment(crypto_ctx_t *ctx, uint32_t src, uint32_t dst, uint32_t size, bool decrypt) {
+  if (size == 0) return;
   uint32_t l2_addr = decrypt ? src : dst;
   uint32_t offset  = l2_addr - ctx->base;
   uint32_t head    = offset % 16;                    // posizione del primo byte dentro il blocco
   uint32_t block   = offset / 16;                    // blocco che contiene il primo byte
-  uint32_t nbytes  = (head + size + 15) & ~15u;      // blocchi interi che toccano il segmento
+  if (size > UINT32_MAX - head - 15u)
+    fatal("segmento troppo grande per la finestra CTR");
+  uint32_t nbytes  = (head + size + 15u) & ~15u;     // blocchi interi che toccano il segmento
 
   uint32_t iv[4];                                    // copia: l'IV del contesto non va modificato
   memcpy(iv, ctx->iv, sizeof(iv));
   if (block != 0)
     PROF_CALL(PROF_ADD_IV, add_u128_leword_visual(iv, block));
+#if PIPE_DMA
+  crypt_chunked(src, dst, size, head, nbytes, iv, ctx->key);
+#else
+  if (nbytes > TCDM_BUFFER_BYTES)
+    fatal("PIPE_DMA=0: il segmento supera la TCDM da 32 KiB");
   PROF_CALL(PROF_AES_START, aes_start(iv, ctx->key));
-
   uint32_t window = (uint32_t) TCDM_BASE + head;     // il dato entra nella finestra a offset head
   PROF_CALL(PROF_DMA_IN, dma_copy(src, window, size));   // byte prima e dopo: spazzatura, e va bene
-  PROF_CALL(PROF_AES_LOOP, aes_ctr_in_place(nbytes));
+  PROF_CALL(PROF_AES_LOOP, aes_ctr_in_place(0, nbytes));
   #if OT_DEBUG 
     if(decrypt){
       printf("Decrypted payload : ");
@@ -738,13 +933,14 @@ static void crypt_segment(crypto_ctx_t *ctx, uint32_t src, uint32_t dst, uint32_
     }
   #endif
   PROF_CALL(PROF_DMA_OUT, dma_copy(window, dst, size));  // fuori solo il segmento utile
+#endif
 }
 
 // =====================================================================
 // SEZIONE C - Trasferimenti
 // =====================================================================
 
-// Un trasferimento sicuro, 1D o 2D: ogni riga e' un segmento a se' (nessun buffering).
+// Un trasferimento sicuro, 1D o 2D: ogni riga e' un segmento a se'.
 //   decifratura (L2 -> L1): la sorgente ha lo stride, la destinazione e' compatta
 //   cifratura   (L1 -> L2): la sorgente e' compatta, la destinazione ha lo stride
 static void secure_transfer(memory_transfer_operation_altered_t *t, bool decrypt, bool geometry) {
@@ -767,7 +963,7 @@ static void secure_transfer(memory_transfer_operation_altered_t *t, bool decrypt
   // Si considera un solo IV globale, calcolato partendo dall'inizio di L2
   if (!is_weights) {
     uint32_t l2_addr = decrypt ? (uint32_t) t->src : (uint32_t) t->dst;
-    if (l2_addr < L2_ARENA_BASE) fatal("trasferimento cifrato fuori dall'arena L2");
+    // if (l2_addr < L2_ARENA_BASE) fatal("trasferimento cifrato fuori dall'arena L2");
     ctx = act_ctx;
   }
   // Cifra/Decifra il payload, visto che le operazioni sono equivalenti 
@@ -783,6 +979,10 @@ static void secure_transfer(memory_transfer_operation_altered_t *t, bool decrypt
 }
 
 static void plain_transfer(const memory_transfer_operation_altered_t *t, bool geometry) {
+  // Come nel percorso sicuro (crypt_segment): un trasferimento vuoto non lancia nessun DMA.
+  if (geometry ? (t->size_1d == 0 || t->repetitions == 0) : (t->size == 0))
+    return;
+
   if (!geometry) {
     dma_copy((uint32_t) t->src, (uint32_t) t->dst, (uint32_t) t->size);
   } else if (t->repetitions == 1) {
@@ -821,14 +1021,16 @@ static void run_hmac(const dif_hmac_t *hmac) {
   CHECK_DIF_OK(dif_hmac_process(hmac));
 }
 
-static int run_test(const dif_hmac_t *hmac, const char *data, size_t len,
+// Messaggio autenticato: IV (16 byte) || dati cifrati
+static int run_test(const dif_hmac_t *hmac, const uint8_t *iv, const char *data, size_t len,
                     const uint8_t *key, uint32_t *expected_digest) {
   dif_hmac_digest_t digest;
 
   test_start(hmac, key);
+  hmac_testutils_push_message(hmac, (const char *) iv, 16);
   hmac_testutils_push_message(hmac, data, len);
   hmac_testutils_fifo_empty_polled(hmac);
-  hmac_testutils_check_message_length(hmac, len * 8);
+  hmac_testutils_check_message_length(hmac, (len + 16) * 8);
   run_hmac(hmac);
 
   // attende il risultato e lo salva in digest.digest
@@ -877,12 +1079,20 @@ static void handle_init(const memory_transfer_operation_altered_t *t, uint32_t f
   }
 }
 
+// L'HMAC copre IV || pesi cifrati. Il cluster manda prima il messaggio IV_MASK, quindi
+// l'IV del tensore e' gia' nella hashmap (chiave: transfer_id = id del tensore).
 static void handle_hmac(const memory_transfer_operation_altered_t *t) {
   dif_hmac_t hmac;
   test_setup(mmio_region_from_addr(TOP_EARLGREY_HMAC_BASE_ADDR), &hmac);
 
+  uint32_t base, iv[4], key[8];
+  if (hashmap_get_random(t->transfer_id, &base, iv, key) == HM_FALSE || base != (uint32_t) t->src) {
+    printf("[OT] HMAC check failed: missing IV! Stopping network execution...");
+    return;
+  }
+
   // t->src = indirizzo dei pesi, t->dst = digest atteso, t->size = lunghezza dei pesi
-  if (run_test(&hmac, (const char *) t->src, t->size, (uint8_t *) kHmacKey, (uint32_t *) t->dst) < 0)
+  if (run_test(&hmac, (const uint8_t *) iv, (const char *) t->src, t->size, (uint8_t *) kHmacKey, (uint32_t *) t->dst) < 0)
     printf("[OT] HMAC check failed! Stopping network execution...");
 }
 
@@ -892,21 +1102,22 @@ static void handle_iv(const memory_transfer_operation_altered_t *t) {
   static uint32_t iv[4];   // statico: la hashmap potrebbe tenere il puntatore
   for (int i = 0; i < 4; i++)
     iv[i] = ((uint32_t *) t->dst)[i];
-  hashmap_push_random((uint32_t) t->src, (uint32_t) t->src, iv, AesKey);
+  hashmap_push_random((uint32_t) t->transfer_id, (uint32_t) t->src, iv, AesKey);
 }
+
 
 static void handle_transfer(memory_transfer_operation_altered_t *t, uint32_t flags) {
   // Indirizzi relativi al cluster -> indirizzi globali
   // Probabilmente non è necessario
-  // if (t->src < CLUSTER_ADDR_LIMIT) {
-  //   t->src += CLUSTER_SPM_BASE_ADDR;
-  // } else if (t->dst < CLUSTER_ADDR_LIMIT) {
-  //   t->dst += CLUSTER_ADDR_LIMIT;
-  // }
+  if (t->src < CLUSTER_ADDR_LIMIT) {
+    t->src += CLUSTER_SPM_BASE_ADDR;
+  } else if (t->dst < CLUSTER_ADDR_LIMIT) {
+    t->dst += CLUSTER_ADDR_LIMIT;
+  }
 
   bool geometry = flags & GEOMETRY_MASK;
 
-  if (flags & SECURE_MASK)
+  if (OT_SECURE_ENABLE && (flags & SECURE_MASK))
     PROF_CALL(PROF_SECURE, secure_transfer(t, flags & OPERATION_MASK, geometry));
   else
     PROF_CALL(PROF_PLAIN, plain_transfer(t, geometry));
@@ -942,6 +1153,11 @@ static bool handle_message(uint32_t letter0, uint32_t letter1) {
     // mb_write(0x1, MBOX_CAR_INT_SND_SET(7));              // il riepilogo si stampa a fine handler
     return false;
   }
+
+  // Modalita' broker: INIT / HMAC / IV non fanno nulla, ma il cluster va comunque avvisato
+  // (aspetta il doorbell dopo ogni messaggio).
+  if (!OT_SECURE_ENABLE && (letter1 & (INIT_MASK | HMAC_MASK | IV_MASK)))
+    return true;
 
   if (letter1 & INIT_MASK) { PROF_CALL(PROF_MSG_INIT, handle_init(t, letter1)); return true; }
   if (letter1 & HMAC_MASK) { PROF_CALL(PROF_MSG_HMAC, handle_hmac(t));          return true; }
@@ -989,6 +1205,9 @@ void external_irq_handler(void) {
 
     if (notify)
       PROF_CALL(PROF_NOTIFY, notify_cluster());
+    #if OT_DEBUG
+    printf("[OT]Cluster EU Rang!");
+    #endif
   }
 
   *PLIC_CLAIM_COMPLETE = iid;
@@ -1023,10 +1242,14 @@ int main(int argc, char **argv) {
 
   // Chiave e IV delle attivazioni: una volta sola, all'avvio (la rete non ha ancora girato)
   // Genera ACT_RANDOM_WORDS = 12 word da 32 bit random, le funzioni sono rimodellate ma operano come quelle nel firmware hand-made
-  rng_buffer_init();
-  utils_csrng_randgen(&rng, ACT_RANDOM_WORDS);
-  // Inizializza il context di cifratura, contenente chiave e IV generati all'avvio di OpenTitan
-  act_ctx_init((const uint32_t *) rng.data);
+  if (OT_SECURE_ENABLE) {
+    rng_buffer_init();
+    utils_csrng_randgen(&rng, ACT_RANDOM_WORDS);
+    // Inizializza il context di cifratura, contenente chiave e IV generati all'avvio di OpenTitan
+    act_ctx_init((const uint32_t *) rng.data);
+  } else {
+    printf("OpenTitan: modalita' broker (OT_SECURE_ENABLE = 0), nessuna cifratura\r\n");
+  }
 
   while (1) {
       asm volatile("fence rw,rw" ::: "memory");
